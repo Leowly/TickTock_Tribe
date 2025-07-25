@@ -1,0 +1,50 @@
+# === Python ===
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.sqlite3
+*.db
+*.log
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+env/
+
+# 本地配置文件
+.env
+*.env
+
+# === Vue / Node ===
+node_modules/
+dist/
+*.local
+*.cache
+*.log
+
+# === VSCode / IDE 配置文件 ===
+.vscode/
+.idea/
+*.swp
+
+# === 数据库文件（根据你的项目结构）===
+/database/*.db
+/database/*.sqlite
+/database/*.sqlite3
+
+# === 构建或打包文件 ===
+/core/__pycache__/
+/frontend/dist/
+/frontend/node_modules/
+/core/__pycache__/
+/*.egg-info/
+
+# === Mac 系统文件 ===
+.DS_Store
+
+# === others ===
+*.bak
+*.tmp
+*.~*

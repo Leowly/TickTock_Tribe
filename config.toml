@@ -1,0 +1,14 @@
+[world]
+width = 50
+height = 50
+
+[forest]
+seed_prob = 0.1
+iterations = 3
+birth_threshold = 4
+
+[water]
+density = 0.02
+turn_prob = 0.3
+stop_prob = 0.1
+height_influence = 2.0

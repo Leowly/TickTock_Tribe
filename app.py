@@ -1,0 +1,92 @@
+from flask import Flask, request, jsonify, render_template
+from core.config import Config
+from core.world import generate_tiles
+from core import database
+
+app = Flask(__name__)
+
+config = Config()
+database.init_db()  # 启动时初始化数据库，确保表存在
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    return jsonify({
+        'world': config.get_world(),
+        'forest': config.get_forest(),
+        'water': config.get_water()
+    })
+
+@app.route('/api/maps/<int:map_id>', methods=['GET'])
+def get_map(map_id):
+    with database.get_connection() as conn:
+        cursor = conn.execute("SELECT width, height, map_data FROM world_maps WHERE id=?", (map_id,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"error": "Map not found"}), 404
+        
+        width, height, map_bytes = row
+        tiles = list(map_bytes)
+        tiles_2d = [tiles[i*width:(i+1)*width] for i in range(height)]
+        return jsonify({
+            "id": map_id,
+            "width": width,
+            "height": height,
+            "tiles": tiles_2d
+        })
+
+@app.route('/api/maps', methods=['GET'])
+def get_maps():
+    with database.get_connection() as conn:
+        cursor = conn.execute("SELECT id, name, width, height, created_at FROM world_maps ORDER BY created_at DESC")
+        maps = [
+            {"id": row[0], "name": row[1], "width": row[2], "height": row[3], "created_at": row[4]}
+            for row in cursor.fetchall()
+        ]
+    return jsonify(maps)
+
+@app.route('/api/generate_map', methods=['POST'])
+def generate_map():
+    data = request.json or {}
+
+    name = data.get('name', 'Unnamed Map')
+    world_params = data.get('world', config.get_world())
+    forest_params = data.get('forest', config.get_forest())
+    water_params = data.get('water', config.get_water())
+
+    width = world_params.get('width', 50)
+    height = world_params.get('height', 50)
+
+    tiles = generate_tiles(
+        width=width,
+        height=height,
+        seed_prob=forest_params.get('seed_prob', 0.1),
+        forest_iterations=forest_params.get('iterations', 3),
+        forest_birth_threshold=forest_params.get('birth_threshold', 4),
+        water_density=water_params.get('density', 0.02),
+        water_turn_prob=water_params.get('turn_prob', 0.3),
+        water_stop_prob=water_params.get('stop_prob', 0.1),
+        water_height_influence=water_params.get('height_influence', 2.0)
+    )
+
+    # 转成bytes写入数据库
+    raw_bytes = bytes([tile for row in tiles for tile in row])
+    map_id = database.insert_map(name, width, height, raw_bytes)
+
+    return jsonify({
+        'success': True,
+        'map_id': map_id,
+        'name': name,
+        'tiles': tiles,
+        'used_params': {
+            'world': world_params,
+            'forest': forest_params,
+            'water': water_params
+        }
+    })
+
+if __name__ == '__main__':
+    app.run(debug=True)

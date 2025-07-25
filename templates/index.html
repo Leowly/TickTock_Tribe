@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>TickTock Tribe 地图生成</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+</head>
+
+<body>
+  <div id="app">
+    <header>
+      <label>
+        地图名字
+        <input type="text" v-model="mapName" placeholder="地图名称" />
+      </label>
+      <label>
+        宽度 (max 2000)
+        <input type="number" v-model.number="world.width" min="1" max="2000" />
+      </label>
+      <label>
+        高度 (max 2000)
+        <input type="number" v-model.number="world.height" min="1" max="2000" />
+      </label>
+      <label>
+        森林种子概率
+        <input type="number" step="0.01" v-model.number="forest.seed_prob" min="0" max="1" />
+      </label>
+      <label>
+        森林迭代次数
+        <input type="number" v-model.number="forest.iterations" min="0" />
+      </label>
+      <label>
+        森林生成阈值
+        <input type="number" v-model.number="forest.birth_threshold" min="0" />
+      </label>
+      <label>
+        水源密度
+        <input type="number" step="0.01" v-model.number="water.density" min="0" max="1" />
+      </label>
+      <label>
+        水转向概率
+        <input type="number" step="0.01" v-model.number="water.turn_prob" min="0" max="1" />
+      </label>
+      <label>
+        水停止概率
+        <input type="number" step="0.01" v-model.number="water.stop_prob" min="0" max="1" />
+      </label>
+      <label>
+        水高程影响
+        <input type="number" step="0.1" v-model.number="water.height_influence" />
+      </label>
+      <button @click="createMap">创建地图</button>
+      <button @click="loadMap">加载地图</button>
+    </header>
+    <canvas id="world-canvas" ref="canvas"></canvas>
+  </div>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+
+</html>
