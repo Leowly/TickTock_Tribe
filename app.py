@@ -6,7 +6,7 @@ from core import database
 app = Flask(__name__)
 
 config = Config()
-database.init_db()  # 启动时初始化数据库，确保表存在
+database.init_db()  # 这行现在会真正初始化数据库表
 
 @app.route('/')
 def index():
@@ -52,25 +52,33 @@ def get_maps():
 def generate_map():
     data = request.json or {}
 
-    name = data.get('name', 'Unnamed Map')
-    world_params = data.get('world', config.get_world())
-    forest_params = data.get('forest', config.get_forest())
-    water_params = data.get('water', config.get_water())
+    # 基本校验
+    try:
+        name = data['name']
+        world_params = data['world']
+        forest_params = data['forest']
+        water_params = data['water']
+    except KeyError as e:
+        return jsonify({'error': f'Missing required parameter: {str(e)}'}), 400
 
-    width = world_params.get('width', 50)
-    height = world_params.get('height', 50)
+    try:
+        width = int(world_params['width'])
+        height = int(world_params['height'])
 
-    tiles = generate_tiles(
-        width=width,
-        height=height,
-        seed_prob=forest_params.get('seed_prob', 0.1),
-        forest_iterations=forest_params.get('iterations', 3),
-        forest_birth_threshold=forest_params.get('birth_threshold', 4),
-        water_density=water_params.get('density', 0.02),
-        water_turn_prob=water_params.get('turn_prob', 0.3),
-        water_stop_prob=water_params.get('stop_prob', 0.1),
-        water_height_influence=water_params.get('height_influence', 2.0)
-    )
+        # 生成地图
+        tiles = generate_tiles(
+            width=width,
+            height=height,
+            seed_prob=forest_params['seed_prob'],
+            forest_iterations=forest_params['iterations'],
+            forest_birth_threshold=forest_params['birth_threshold'],
+            water_density=water_params['density'],
+            water_turn_prob=water_params['turn_prob'],
+            water_stop_prob=water_params['stop_prob'],
+            water_height_influence=water_params['height_influence']
+        )
+    except (KeyError, ValueError, TypeError) as e:
+        return jsonify({'error': f'Invalid or missing map generation parameter: {str(e)}'}), 400
 
     # 转成bytes写入数据库
     raw_bytes = bytes([tile for row in tiles for tile in row])
@@ -88,5 +96,17 @@ def generate_map():
         }
     })
 
+@app.route('/api/maps/<int:map_id>', methods=['DELETE'])
+def delete_map(map_id):
+    with database.get_connection() as conn:
+        conn.execute("DELETE FROM world_maps WHERE id=?", (map_id,))
+        conn.commit()
+    return jsonify({"success": True})
+
+@app.route('/view_map/<int:map_id>')
+def view_map(map_id):
+    return render_template('map.html')
+
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=16151, debug=True)

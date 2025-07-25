@@ -8,19 +8,22 @@ os.makedirs(DATA_DIR, exist_ok=True)  # 确保目录存在
 
 DB_PATH = os.path.join(DATA_DIR, 'world_maps.db')
 
+def get_connection():
+    return sqlite3.connect(DB_PATH)
+
 def init_db():
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        with conn:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS world_maps (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                width INTEGER NOT NULL,
-                height INTEGER NOT NULL,
-                map_data BLOB NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            """)
+    with get_connection() as conn:
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS world_maps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            map_data BLOB NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        conn.commit()
 
 def insert_map(name: str, width: int, height: int, map_bytes: bytes):
     with closing(sqlite3.connect(DB_PATH)) as conn:

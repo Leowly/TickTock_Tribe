@@ -1,14 +1,17 @@
+[view]
+max_visible_pixels = 25000
+
 [world]
-width = 50
-height = 50
+width = 1000
+height = 1000
 
 [forest]
-seed_prob = 0.1
+seed_prob = 0.05
 iterations = 3
-birth_threshold = 4
+birth_threshold = 2
 
 [water]
-density = 0.02
-turn_prob = 0.3
-stop_prob = 0.1
-height_influence = 2.0
+density = 0.001
+turn_prob = 0.1
+stop_prob = 0.005
+height_influence = 5.0
