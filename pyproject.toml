@@ -1,0 +1,9 @@
+[project]
+name = "ticktock-tribe"
+version = "0.1.0"
+description = "一个基于时间刻（tick-tock）驱动的微型社会模拟器，您可以在其中观察一个部落在程序生成的世界中采集、建造和繁衍。"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flask>=3.1.1",
+]
