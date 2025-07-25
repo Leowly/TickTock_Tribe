@@ -31,6 +31,7 @@ dist/
 
 # === 数据库文件（根据你的项目结构）===
 /database/*.db
+/database/*.bin
 /database/*.sqlite
 /database/*.sqlite3
 
