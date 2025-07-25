@@ -13,19 +13,5 @@
 
 ## 技术栈
 
-*   **后端**: Python + Flask
+*   **后端**: Python + Flask, C
 *   **前端**: HTML5 Canvas, CSS, JavaScript
-
-## 如何运行
-
-1.  确保你已安装 Python 3.12 或更高版本。
-2.  克隆或下载此项目。
-3.  在项目根目录打开终端，安装依赖：
-    ```bash
-    pip install .
-    ```
-4.  启动后端服务器：
-    ```bash
-    python app.py
-    ```
-5.  在浏览器中打开 `http://127.0.0.1:16151` 即可查看和交互。
