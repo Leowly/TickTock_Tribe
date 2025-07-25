@@ -23,7 +23,50 @@ typedef struct
     double density;
     double turn_prob;
     double stop_prob;
+    double height_influence; // 高度场影响因子
 } WaterParams;
+
+// 生成并平滑化高度场
+static double *generate_height_field(int width, int height)
+{
+    double *height_arr = (double *)malloc(width * height * sizeof(double));
+    if (!height_arr)
+        return NULL;
+
+    // 生成基础随机高度
+    for (int i = 0; i < width * height; i++)
+    {
+        height_arr[i] = (double)rand() / RAND_MAX;
+    }
+
+    // 平滑处理
+    double *temp = (double *)malloc(width * height * sizeof(double));
+    if (!temp)
+    {
+        free(height_arr);
+        return NULL;
+    }
+
+    // 多次平滑
+    for (int iter = 0; iter < 3; iter++)
+    {
+        for (int y = 1; y < height - 1; y++)
+        {
+            for (int x = 1; x < width - 1; x++)
+            {
+                temp[y * width + x] = (height_arr[(y - 1) * width + x] +
+                                       height_arr[(y + 1) * width + x] +
+                                       height_arr[y * width + (x - 1)] +
+                                       height_arr[y * width + (x + 1)]) *
+                                      0.25;
+            }
+        }
+        memcpy(height_arr, temp, width * height * sizeof(double));
+    }
+
+    free(temp);
+    return height_arr;
+}
 
 // 检查坐标是否在边界内
 int is_within_bounds(int x, int y, int width, int height)
@@ -101,6 +144,14 @@ extern "C"
         }
         free(new_grid);
 
+        // 生成高度场
+        double *height_field = generate_height_field(width, height);
+        if (!height_field)
+        {
+            free(grid);
+            return NULL;
+        }
+
         // 水源密度计算
         int num_sources = (int)(width * height * w_params.density);
         if (num_sources < 1)
@@ -137,31 +188,59 @@ extern "C"
                     if ((double)rand() / RAND_MAX < w_params.stop_prob)
                         break;
 
-                    double rv = (double)rand() / RAND_MAX;
-                    if (rv < w_params.turn_prob)
+                    // 评估四个可能的方向
+                    double best_score = -1.0;
+                    int best_dx = dx, best_dy = dy;
+
+                    // 检查当前方向和转向选项
+                    int possible_dirs[3][2] = {
+                        {dx, dy},  // 当前方向
+                        {-dy, dx}, // 左转
+                        {dy, -dx}  // 右转
+                    };
+
+                    for (int dir = 0; dir < 3; dir++)
                     {
-                        int tmp = dx;
-                        dx = -dy;
-                        dy = tmp; // 左转
-                    }
-                    else if (rv < 2 * w_params.turn_prob)
-                    {
-                        int tmp = dx;
-                        dx = dy;
-                        dy = -tmp; // 右转
+                        int test_dx = possible_dirs[dir][0];
+                        int test_dy = possible_dirs[dir][1];
+                        int nx = cx + test_dx;
+                        int ny = cy + test_dy;
+
+                        if (!is_within_bounds(nx, ny, width, height))
+                            continue;
+
+                        // 计算高度差影响
+                        double current_height = height_field[cy * width + cx];
+                        double next_height = height_field[(cy + test_dy) * width + (cx + test_dx)];
+                        double height_diff = current_height - next_height;
+                        double score = 1.0 + height_diff * w_params.height_influence;
+
+                        // 添加随机性
+                        score += ((double)rand() / RAND_MAX - 0.5) * 0.2;
+
+                        if (score > best_score)
+                        {
+                            best_score = score;
+                            best_dx = test_dx;
+                            best_dy = test_dy;
+                        }
                     }
 
-                    int nx = cx + dx, ny = cy + dy;
-                    if (!is_within_bounds(nx, ny, width, height))
+                    // 如果没有找到有效方向
+                    if (best_score < 0)
                         break;
 
-                    cx = nx;
-                    cy = ny;
+                    dx = best_dx;
+                    dy = best_dy;
+                    cx += dx;
+                    cy += dy;
                     grid[cy * width + cx] = WATER;
                 }
             }
         }
 
+        // 清理高度场
+        free(height_field);
         return grid;
     }
 
