@@ -17,7 +17,8 @@ def get_config():
     return jsonify({
         'world': config.get_world(),
         'forest': config.get_forest(),
-        'water': config.get_water()
+        'water': config.get_water(),
+        'view': config.get_view()
     })
 
 @app.route('/api/maps/<int:map_id>', methods=['GET'])

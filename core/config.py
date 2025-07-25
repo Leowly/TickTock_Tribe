@@ -21,3 +21,6 @@ class Config:
 
     def get_water(self):
         return self.data.get('water', {})
+
+    def get_view(self):
+        return self.data.get('view', {})

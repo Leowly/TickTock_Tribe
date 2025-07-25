@@ -10,7 +10,14 @@ class MapViewer {
     this.dpr = window.devicePixelRatio || 1;
 
     // 状态
-    this.camera = { x: 0, y: 0, zoom: 1, minZoom: 0.1, maxZoom: 5, maxVisiblePixels: 500000 };
+    this.camera = { 
+      x: 0, 
+      y: 0, 
+      zoom: 1, 
+      minZoom: 0.1, 
+      maxZoom: 5, 
+      maxVisiblePixels: null  // 将从配置加载
+    };
     this.interaction = {
       isDragging: false, isPinching: false, lastX: 0, lastY: 0,
       initialPinchDistance: 0, lastZoom: 1
@@ -164,10 +171,20 @@ class MapViewer {
   }
 
   updateMinZoom() {
-    const canvasLogicalArea = window.innerWidth * window.innerHeight;
-    const tileScreenArea = canvasLogicalArea / this.camera.maxVisiblePixels;
-    const minTileSize = Math.sqrt(tileScreenArea);
-    this.camera.minZoom = minTileSize / this.BASE_TILE_SIZE;
+    // 计算屏幕面积
+    const screenArea = window.innerWidth * window.innerHeight;
+    // 计算单个瓦片的最小面积
+    const minTileArea = screenArea / this.camera.maxVisiblePixels;
+    // 计算瓦片的最小边长
+    const minTileSize = Math.sqrt(minTileArea);
+    // 设置最小缩放比例
+    this.camera.minZoom = Math.max(0.1, minTileSize / this.BASE_TILE_SIZE);
+    
+    // 确保当前缩放不小于最小缩放
+    if (this.camera.zoom < this.camera.minZoom) {
+      this.camera.zoom = this.camera.minZoom;
+      this.constrainCamera();
+    }
   }
 
   zoomAtPoint(mouseX, mouseY, zoomChange) {
@@ -190,9 +207,17 @@ class MapViewer {
   async initialize() {
     this.setupCanvas();
     
-    // 从URL获取地图ID
-    const mapId = window.location.pathname.split('/').pop();
     try {
+      // 先加载配置
+      const configRes = await fetch('/api/config');
+      const config = await configRes.json();
+      
+      // 从配置设置参数
+      this.camera.maxVisiblePixels = config.view.max_visible_pixels;
+      this.updateMinZoom();
+      
+      // 加载地图数据
+      const mapId = window.location.pathname.split('/').pop();
       const response = await fetch(`/api/maps/${mapId}`);
       if (!response.ok) throw new Error(`Failed to load map: ${response.status}`);
       
