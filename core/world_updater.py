@@ -72,11 +72,14 @@ class WorldUpdater:
             return None, 0, 0
 
     def save_map_data(
-        self, map_id: int, grid_2d: List[List[int]], width: int, height: int
+        self, map_id: int, grid_2d: Optional[List[List[int]]], width: int, height: int
     ) -> bool:
         """
         将更新后的地图数据保存回数据库。
         """
+        if grid_2d is None:
+            logger.error(f"WorldUpdater: grid_2d is None for map ID {map_id}")
+            return False
         try:
             # 将 2D list 转换回 flat list
             flat_tiles = [tile for row in grid_2d for tile in row]
@@ -125,23 +128,20 @@ class WorldUpdater:
         """
         使用调试逻辑更新地图。
         """
-        # --- 修复 Bug 1 & 2: 检查 load_map_data 的结果 ---
         grid_2d, width, height = self.load_map_data(map_id)
         # 如果加载失败，grid_2d 会是 None，此时应立即返回 False 表示更新失败
         if grid_2d is None:
-            # load_map_data 内部已经记录了错误日志
-            return False # <--- 关键修复：加载失败则不继续执行
-        # --- 检查结束，现在 grid_2d, width, height 都是有效的 ---
-
-        # --- 现在调用 update_debug_logic 是安全的，因为 grid_2d 不是 None ---
-        changed = update_debug_logic(grid_2d, width, height, current_tick) # <--- 第 121 行的调用现在安全了
-        # 如果有变化，则保存
+            return False
+        if DEBUG_UPDATER_AVAILABLE and update_debug_logic is not None:
+            changed = update_debug_logic(grid_2d, width, height, current_tick)
+        else:
+            logger.error("Debug update logic is not available.")
+            return False
         if changed:
             logger.info(
                 f"WorldUpdater: Changes detected by debug logic for map {map_id}, saving..."
             )
-            # --- 现在调用 save_map_data 也是安全的，因为 grid_2d 不是 None ---
-            return self.save_map_data(map_id, grid_2d, width, height) # <--- 第 134 行的调用现在安全了
+            return self.save_map_data(map_id, grid_2d, width, height)
         else:
             # 如果没有变化（例如，没有 PLAIN 格子了），也认为更新成功
             logger.debug(
@@ -149,6 +149,4 @@ class WorldUpdater:
             )
             return True
 
-# 创建一个全局实例供 ticker 使用
-# 默认不使用调试逻辑，需要在 app.py 中显式开启
 world_updater_instance = WorldUpdater(use_debug_logic=False)
