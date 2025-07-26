@@ -9,7 +9,7 @@
     canvas { display: block; touch-action: none; }
     .back-btn { position: fixed; top: 1rem; left: 1rem; padding: 0.5rem 1rem; 
                 background: rgba(0,0,0,0.5); color: white; border: none; 
-                border-radius: 4px; cursor: pointer; }
+                border-radius: 4px; cursor: pointer; z-index: 10; /* 确保在canvas上方 */ }
     .back-btn:hover { background: rgba(0,0,0,0.7); }
   </style>
 </head>
@@ -18,10 +18,38 @@
   <button class="back-btn" onclick="history.back()">返回</button>
   <script src="{{ url_for('static', filename='map-viewer.js') }}"></script>
   <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const viewer = new MapViewer(document.getElementById('map-canvas'));
-      viewer.initialize();
-    });
+    (function() { // 使用 IIFE 创建局部作用域
+      let viewerInstance = null; // 存储 viewer 实例
+
+      document.addEventListener('DOMContentLoaded', () => {
+        console.log("DOM fully loaded and parsed. Initializing MapViewer...");
+        const canvas = document.getElementById('map-canvas');
+        if (canvas) {
+          viewerInstance = new MapViewer(canvas);
+          viewerInstance.initialize().then(() => {
+            console.log("MapViewer initialized successfully.");
+          }).catch((error) => {
+            console.error("Error during MapViewer initialization:", error);
+          });
+        } else {
+          console.error("Canvas element not found!");
+        }
+      });
+
+      // --- 添加 beforeunload 事件监听器 ---
+      // 当用户关闭页面、刷新页面或导航到其他页面时触发
+      window.addEventListener('beforeunload', (event) => {
+        console.log("Page is about to unload. Cleaning up...");
+        if (viewerInstance) {
+           viewerInstance.destroy(); // 调用 destroy 方法停止刷新和模拟
+           // 注意：浏览器可能不会等待异步操作（如 fetch）完成
+        }
+        // 根据需要，你可以设置 returnValue 来显示确认对话框（现代浏览器可能忽略自定义消息）
+        // event.returnValue = '确定要离开吗？模拟将会停止。'; 
+        // return event.returnValue;
+      });
+
+    })(); // IIFE 结束
   </script>
 </body>
 </html>

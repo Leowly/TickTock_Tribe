@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template
 from core.config import Config
 from core.world import generate_tiles
 from core import database
+from core.ticker import ticker_instance
 
 app = Flask(__name__)
 
@@ -108,6 +109,34 @@ def delete_map(map_id):
 def view_map(map_id):
     return render_template('map.html')
 
+@app.route('/api/maps/<int:map_id>/start_simulation', methods=['POST'])
+def start_simulation(map_id):
+    """启动指定地图的模拟"""
+    # 可以添加检查地图是否存在的逻辑
+    map_data_row = database.get_map_by_id(map_id)
+    if not map_data_row:
+        return jsonify({"error": "Map not found"}), 404
+
+    ticker_instance.start_simulation(map_id)
+    return jsonify({"success": True, "message": f"Simulation started for map {map_id}"}), 200
+
+@app.route('/api/maps/<int:map_id>/stop_simulation', methods=['POST'])
+def stop_simulation(map_id):
+    """停止指定地图的模拟"""
+    ticker_instance.stop_simulation(map_id)
+    return jsonify({"success": True, "message": f"Simulation stopped for map {map_id}"}), 200
+
+@app.route('/api/maps/<int:map_id>/simulation_status', methods=['GET'])
+def simulation_status(map_id):
+    """获取指定地图的模拟状态"""
+    is_running = ticker_instance.is_simulation_running(map_id)
+    # 可以添加获取当前 tick 数等信息的逻辑
+    current_tick = ticker_instance.active_maps.get(map_id, -1) if is_running else -1
+    return jsonify({
+        "map_id": map_id,
+        "is_running": is_running,
+        "current_tick": current_tick
+    }), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=16151, debug=True)

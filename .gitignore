@@ -54,3 +54,5 @@ dist/
 *.tmp
 *.~*
 .python-version
+collect.sh
+集合.txt
