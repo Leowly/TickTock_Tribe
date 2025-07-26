@@ -139,14 +139,25 @@ class MapViewer {
         this.interaction.lastX = e.touches[0].clientX;
         this.interaction.lastY = e.touches[0].clientY;
       } else if (this.interaction.isPinching && e.touches.length === 2) {
-        const currentPinchDistance = this.getDistance(e.touches[0], e.touches[1]);
+        const p1 = e.touches[0];
+        const p2 = e.touches[1];
+    
+        const currentPinchDistance = this.getDistance(p1, p2);
         const zoomFactor = currentPinchDistance / this.interaction.initialPinchDistance;
         const newZoom = Math.max(
           this.camera.minZoom,
           Math.min(this.camera.maxZoom, this.interaction.lastZoom * zoomFactor)
         );
-        this.camera.zoom = newZoom;
+    
+        // 计算两指中心点
+        const centerX = (p1.clientX + p2.clientX) / 2;
+        const centerY = (p1.clientY + p2.clientY) / 2;
+    
+        // 应用“缩放 + 平移”逻辑（复用 zoomAtPoint）
+        const zoomChange = newZoom / this.camera.zoom;
+        this.zoomAtPoint(centerX, centerY, zoomChange);
       }
+    
       this.constrainCamera();
     }, { passive: true });
   }
