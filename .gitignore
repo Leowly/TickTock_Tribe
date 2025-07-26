@@ -17,6 +17,10 @@ env/
 .env
 *.env
 
+# 编译后文件
+/generator/*.so
+/generator/*.dll
+
 # === Vue / Node ===
 node_modules/
 dist/
@@ -49,3 +53,4 @@ dist/
 *.bak
 *.tmp
 *.~*
+.python-version

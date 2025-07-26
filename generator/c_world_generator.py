@@ -1,6 +1,7 @@
 import os
 import sys
 import ctypes
+import subprocess
 from ctypes import c_int, c_double, POINTER, Structure, c_uint8
 
 class ForestParams(Structure):
@@ -21,14 +22,25 @@ class WaterParams(Structure):
 class CWorldGenerator:
     def __init__(self):
         lib_name = None
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        lib_base = os.path.abspath(os.path.join(os.path.dirname(__file__), 'generator'))
+        src_path = os.path.join(os.path.dirname(__file__), 'generator.cpp')
+
         if sys.platform.startswith('win'):
-            lib_name = os.path.join(base_dir, 'generator', 'c_world_generator.dll')
+            lib_name = os.path.join(os.path.dirname(__file__), 'generator.dll')
+            compile_cmd = ['g++', '-shared', '-o', lib_name, '-O2', '-static-libgcc', '-static-libstdc++', '-fPIC', src_path]
         elif sys.platform.startswith('linux'):
-            lib_name = os.path.join(base_dir, 'generator', 'libc_world_generator.so')
+            lib_name = os.path.join(os.path.dirname(__file__), 'generator.so')
+            compile_cmd = ['g++', '-shared', '-fPIC', '-O2', src_path, '-o', lib_name]
         else:
             raise RuntimeError("Unsupported platform")
 
+        if not os.path.exists(lib_name):
+            print(f"🔧 Compiling C++ library: {lib_name}")
+            try:
+                subprocess.run(compile_cmd, check=True)
+                print("✅ Compilation successful")
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"❌ Failed to compile C++ library: {e}")
 
         self.lib = ctypes.CDLL(lib_name)
         self.lib.generate_map.restype = POINTER(c_uint8)
@@ -47,7 +59,6 @@ class CWorldGenerator:
         if not ptr:
             raise RuntimeError("Map generation failed")
 
-        # 拷贝返回的数组内容
         size = width * height
         tiles = [ptr[i] for i in range(size)]
 
