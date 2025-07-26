@@ -3,11 +3,19 @@ from core.config import Config
 from core.world import generate_tiles
 from core import database
 from core.ticker import ticker_instance
-
+from core.world_updater import world_updater_instance
 app = Flask(__name__)
 
 config = Config()
 database.init_db()  # 这行现在会真正初始化数据库表
+
+# --- 在应用启动时设置是否使用调试逻辑 ---
+# 你可以通过配置文件、环境变量或硬编码来控制
+USE_DEBUG_LOGIC = False # <--- 设置为 True 以启用调试逻辑，False 则禁用
+
+# 设置全局实例的 use_debug_logic 属性
+world_updater_instance.use_debug_logic = USE_DEBUG_LOGIC
+print(f"🔧 App initialized. Debug logic is {'ENABLED' if USE_DEBUG_LOGIC else 'DISABLED'}.")
 
 @app.route('/')
 def index():
@@ -24,12 +32,13 @@ def get_config():
 
 @app.route('/api/maps/<int:map_id>', methods=['GET'])
 def get_map(map_id):
+    # --- 在返回数据前，更新该地图的活动时间 ---
+    ticker_instance.update_activity(map_id)
     with database.get_connection() as conn:
         cursor = conn.execute("SELECT width, height, map_data FROM world_maps WHERE id=?", (map_id,))
         row = cursor.fetchone()
         if not row:
             return jsonify({"error": "Map not found"}), 404
-        
         width, height, map_bytes = row
         tiles = list(map_bytes)
         tiles_2d = [tiles[i*width:(i+1)*width] for i in range(height)]
@@ -137,6 +146,35 @@ def simulation_status(map_id):
         "is_running": is_running,
         "current_tick": current_tick
     }), 200
+
+# 数量统计
+@app.route('/api/debug/map_stats/<int:map_id>', methods=['GET'])
+def debug_map_stats(map_id):
+    """临时调试接口：返回地图统计数据"""
+    map_data_row = database.get_map_by_id(map_id)
+    if not map_data_row:
+        return jsonify({"error": "Map not found"}), 404
+        
+    width, height, map_bytes = map_data_row
+    stats = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+    for byte_val in map_bytes:
+        if byte_val in stats:
+            stats[byte_val] += 1
+            
+    return jsonify({
+        "map_id": map_id,
+        "width": width,
+        "height": height,
+        "total_tiles": len(map_bytes),
+        "stats": stats,
+        "readable_stats": {
+            "PLAIN (0)": stats[0],
+            "FOREST (1)": stats[1],
+            "WATER (2)": stats[2],
+            "FARM_UNTILLED (3)": stats[3],
+            "FARM_TILLED (4)": stats[4],
+        }
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=16151, debug=True)

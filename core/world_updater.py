@@ -11,6 +11,15 @@ WATER = 2
 FARM_UNTILLED = 3  # 未耕种/未成熟耕地
 FARM_TILLED = 4    # 已耕种/已成熟耕地
 
+# --- 导入调试逻辑 ---
+try:
+    from .debug_updater import update_debug_logic
+    DEBUG_UPDATER_AVAILABLE = True
+except ImportError as e:
+    logging.getLogger(__name__).warning(f"Debug updater not available: {e}")
+    DEBUG_UPDATER_AVAILABLE = False
+    update_debug_logic = None # 确保变量存在
+
 logger = logging.getLogger(__name__)
 
 class WorldUpdater:
@@ -18,8 +27,13 @@ class WorldUpdater:
     负责执行世界状态更新逻辑。
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, use_debug_logic: bool = False):
+        """
+        初始化 WorldUpdater。
+        Args:
+            use_debug_logic (bool): 是否使用调试更新逻辑。默认为 False。
+        """
+        self.use_debug_logic = use_debug_logic
 
     def load_map_data(self, map_id: int) -> Tuple[Optional[List[List[int]]], int, int]:
         """
@@ -28,21 +42,17 @@ class WorldUpdater:
             (grid_2d: List[List[int]], width: int, height: int) or (None, 0, 0) if failed.
         """
         # 调用 database.get_map_by_id，它返回 (width, height, map_data)
-        # 根据你提供的最新 database.py 文件
         map_data_row = database.get_map_by_id(map_id)
         if not map_data_row:
             logger.error(f"WorldUpdater: Map ID {map_id} not found in database.")
             return None, 0, 0
 
-        # --- 正确解包来自 database.get_map_by_id 的元组 ---
-        # database.py 中定义 get_map_by_id 返回 (width, height, map_data)
         try:
             width, height, map_bytes = map_data_row
         except ValueError as e:
             logger.error(f"WorldUpdater: Unexpected data format from database.get_map_by_id for ID {map_id}. Expected (width, height, map_data). Error: {e}")
             logger.debug(f"WorldUpdater: Received data row: {map_data_row}")
             return None, 0, 0
-        # --- 解包结束 ---
 
         if not map_bytes:
             logger.error(f"WorldUpdater: Map ID {map_id} has no data.")
@@ -67,8 +77,8 @@ class WorldUpdater:
             flat_tiles = [tile for row in grid_2d for tile in row]
             # 转换为 bytes
             map_bytes = bytes(flat_tiles)
-            # 保存到数据库 (调用 database.py 的函数)
-            success = database.update_map_data(map_id, map_bytes) # 确保 database.py 有此函数
+            # 保存到数据库
+            success = database.update_map_data(map_id, map_bytes)
             if success:
                 logger.debug(f"WorldUpdater: Saved updated map data for ID {map_id}.")
             else:
@@ -78,50 +88,56 @@ class WorldUpdater:
             logger.error(f"WorldUpdater: Failed to save map data for ID {map_id}: {e}")
             return False
 
-    def update_debug(self, map_id: int, current_tick: int) -> bool:
+    def update(self, map_id: int, current_tick: int) -> bool:
         """
-        调试用更新函数：
-        1. 将一个平原 (PLAIN) 按顺序变为未耕种耕地 (FARM_UNTILLED)。
-        2. 将所有未耕种耕地 (FARM_UNTILLED) 变为已耕种耕地 (FARM_TILLED)。
+        根据配置选择更新函数。
+        这是 Ticker 调用的主要入口点。
         Args:
             map_id: 地图ID
             current_tick: 当前的 tick 数
         Returns:
-            bool: 是否成功执行了更新
+            bool: 是否成功执行了更新 (或成功加载/保存，即使无变化)
         """
-        logger.info(f"WorldUpdater: Running debug update for map {map_id} at tick {current_tick}")
-        
+        if self.use_debug_logic and DEBUG_UPDATER_AVAILABLE:
+            logger.debug(f"WorldUpdater: Using debug update logic for map {map_id}")
+            return self._update_with_debug_logic(map_id, current_tick)
+        else:
+            # 默认行为：如果未启用调试逻辑或调试逻辑不可用，则加载并保存数据（无变化）
+            # 这确保了 ticker 认为更新是“成功”的，即使没有实际改变。
+            logger.debug(f"WorldUpdater: No update logic defined or debug logic disabled for map {map_id}. Loading and saving without changes.")
+            grid_data_result = self.load_map_data(map_id)
+            if grid_data_result[0] is not None: # 如果加载成功
+                 grid_2d, width, height = grid_data_result
+                 # 即使没有变化也保存，保持与 ticker 的兼容性
+                 return self.save_map_data(map_id, grid_2d, width, height)
+            return False # 加载失败则返回 False
+
+    def _update_with_debug_logic(self, map_id: int, current_tick: int) -> bool:
+        """
+        使用调试逻辑更新地图。
+        """
         grid_2d, width, height = self.load_map_data(map_id)
         if grid_2d is None:
             return False
 
-        # --- 调试逻辑 1: 将一个 PLAIN 变为 FARM_UNTILLED ---
-        total_tiles = width * height
-        if total_tiles > 0:
-            # 使用 current_tick 来确定要改变的格子
-            target_index_1d = current_tick % total_tiles
-            target_y = target_index_1d // width
-            target_x = target_index_1d % width
+        # 调用独立的调试逻辑函数
+        # 注意：update_debug_logic 会直接修改传入的 grid_2d
+        changed = update_debug_logic(grid_2d, width, height, current_tick)
+        
+        # 如果有变化，则保存
+        if changed:
+            logger.info(f"WorldUpdater: Changes detected by debug logic for map {map_id}, saving...")
+            return self.save_map_data(map_id, grid_2d, width, height)
+        else:
+            # 如果没有变化（例如，没有 PLAIN 格子了），也认为更新成功
+            # ticker 期望每次调用都返回成功，除非发生致命错误
+            logger.debug(f"WorldUpdater: Debug logic ran but no changes for map {map_id} at tick {current_tick}.")
+            return True # 或者 return self.save_map_data(...) 如果你总是想写数据库
 
-            if 0 <= target_y < height and 0 <= target_x < width:
-                # 检查该格子是否为平原
-                if grid_2d[target_y][target_x] == PLAIN:
-                    grid_2d[target_y][target_x] = FARM_UNTILLED # <-- 使用新常量
-                    logger.debug(f"WorldUpdater: Changed tile ({target_x}, {target_y}) to FARM_UNTILLED.")
-
-        # --- 调试逻辑 2: 将所有 FARM_UNTILLED 变为 FARM_TILLED ---
-        # 这模拟了作物立即成熟的过程
-        changed_any = False # 标记是否有任何更改
-        for y in range(height):
-            for x in range(width):
-                if grid_2d[y][x] == FARM_UNTILLED:
-                    grid_2d[y][x] = FARM_TILLED # <-- 使用新常量
-                    logger.debug(f"WorldUpdater: Matured farm tile ({x}, {y}).")
-                    changed_any = True
-
-        # --- 保存 ---
-        # 为了调试清晰，我们总是保存
-        return self.save_map_data(map_id, grid_2d, width, height)
+    # --- 移除旧的 update_debug 方法 ---
+    # def update_debug(self, map_id: int, current_tick: int) -> bool:
+    #     ... (旧代码，已被新的 update 和 _update_with_debug_logic 替代) ...
 
 # 创建一个全局实例供 ticker 使用
-world_updater_instance = WorldUpdater()
+# 默认不使用调试逻辑，需要在 app.py 中显式开启
+world_updater_instance = WorldUpdater(use_debug_logic=False) 
