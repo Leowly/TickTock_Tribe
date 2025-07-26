@@ -7,7 +7,7 @@ from core.world_updater import world_updater_instance
 app = Flask(__name__)
 
 config = Config()
-database.init_db()  # 这行现在会真正初始化数据库表
+database.init_db()
 
 # --- 在应用启动时设置是否使用调试逻辑 ---
 # 你可以通过配置文件、环境变量或硬编码来控制
