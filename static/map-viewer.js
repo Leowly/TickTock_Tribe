@@ -260,34 +260,104 @@ class MapViewer {
           // 不弹窗警告用户，因为页面可能正在卸载
       }
   }
-
-  // --- 新增方法：加载地图数据 ---
-  async loadMapData() {
-      if (this.mapId === null) {
-          throw new Error("Map ID is not set");
-      }
-      // console.log(`Refreshing data for map ${this.mapId}`); // 调试用
-      const response = await fetch(`/api/maps/${this.mapId}`);
-      if (!response.ok) {
-          if (response.status === 404) {
-              throw new Error("地图未找到 (404)");
-          }
-          throw new Error(`Failed to load map: ${response.status} ${response.statusText}`);
-      }
-      const data = await response.json();
-      if (this.worldData) {
-          this.worldData.grid = data.tiles;
-      } else {
-          this.worldData = {
-              width: data.width,
-              height: data.height,
-              grid: data.tiles
-          };
-      }
-      if (!this.worldData.grid || !this.worldData.grid.length) {
-          throw new Error('Invalid map data structure received from server');
-      }
-  }
+    async loadMapData() {
+        if (this.mapId === null) {
+            throw new Error("Map ID is not set");
+        }
+        // console.log(`Refreshing data for map ${this.mapId}`); // 调试用
+        const response = await fetch(`/api/maps/${this.mapId}`);
+        if (!response.ok) {
+            if (response.status === 404) {
+                throw new Error("地图未找到 (404)");
+            }
+            throw new Error(`Failed to load map: ${response.status} ${response.statusText}`);
+        }
+        const data = await response.json();
+        
+        // --- 修改开始：处理 Base64 数据 ---
+        if (data.tiles_base64) {
+            try {
+                // 1. 解码 Base64 字符串为二进制字符串
+                const binaryString = atob(data.tiles_base64);
+                
+                // 2. 将二进制字符串转换为 Uint8Array
+                //    (更高效的方法是直接从 binaryString 创建，但为了清晰起见，我们先转成 ArrayBuffer)
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                
+                // 3. 如果需要二维数组 (map-viewer.js 的 draw 方法目前需要二维数组)
+                //    将一维 Uint8Array 转换为二维数组
+                const grid_2d = [];
+                for (let y = 0; y < data.height; y++) {
+                     const row = [];
+                     for (let x = 0; x < data.width; x++) {
+                         row.push(bytes[y * data.width + x]);
+                     }
+                     grid_2d.push(row);
+                }
+                
+                // 4. 更新 worldData
+                if (this.worldData) {
+                    this.worldData.grid = grid_2d; // 使用转换后的二维数组
+                    this.worldData.width = data.width;
+                    this.worldData.height = data.height;
+                } else {
+                    this.worldData = {
+                        width: data.width,
+                        height: data.height,
+                        grid: grid_2d // 使用转换后的二维数组
+                    };
+                }
+    
+                // --- 可选优化 (如果 draw 方法能直接处理 Uint8Array) ---
+                // 如果你修改了 draw 方法以直接使用 Uint8Array，可以这样做：
+                // if (this.worldData) {
+                //     this.worldData.flatGrid = bytes; // 存储一维数组
+                //     this.worldData.width = data.width;
+                //     this.worldData.height = data.height;
+                //     // 确保 draw 方法不再依赖 this.worldData.grid
+                // } else {
+                //     this.worldData = {
+                //         width: data.width,
+                //         height: data.height,
+                //         flatGrid: bytes // 存储一维数组
+                //     };
+                // }
+                // --- 可选优化结束 ---
+                
+            } catch (e) {
+                 console.error("Error decoding base64 map ", e);
+                 throw new Error("Failed to decode map data received from server.");
+            }
+        } else {
+             // 如果服务器仍然返回旧的 tiles 结构（为了向后兼容或过渡）
+             if (data.tiles && Array.isArray(data.tiles)) {
+                 if (this.worldData) {
+                     this.worldData.grid = data.tiles;
+                     this.worldData.width = data.width;
+                     this.worldData.height = data.height;
+                 } else {
+                     this.worldData = {
+                         width: data.width,
+                         height: data.height,
+                         grid: data.tiles
+                     };
+                 }
+             } else {
+                 throw new Error('Invalid map data structure received from server: missing tiles_base64 or tiles');
+             }
+        }
+    // --- 修改结束 ---
+    
+    // 保留原有的校验
+    if (!this.worldData.grid || !this.worldData.grid.length) {
+         // 注意：如果使用 flatGrid，这里的校验也需要调整
+        throw new Error('Invalid map data structure received from server');
+    }
+}
 
   // --- 修改 initialize 方法 ---
   async initialize() {

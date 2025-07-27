@@ -1,12 +1,16 @@
+# app.py
 from flask import Flask, request, jsonify, render_template
 from core.config import Config
-from core.world import generate_tiles
+from generator.c_world_generator import CWorldGenerator
 from core import database
 from core.ticker import ticker_instance
 from core.world_updater import world_updater_instance
+import base64
 app = Flask(__name__)
 
 config = Config()
+generator = CWorldGenerator()
+
 database.init_db()
 
 # --- 在应用启动时设置是否使用调试逻辑 ---
@@ -30,6 +34,8 @@ def get_config():
         'view': config.get_view()
     })
 
+
+
 @app.route('/api/maps/<int:map_id>', methods=['GET'])
 def get_map(map_id):
     # --- 在返回数据前，更新该地图的活动时间 ---
@@ -40,14 +46,16 @@ def get_map(map_id):
         if not row:
             return jsonify({"error": "Map not found"}), 404
         width, height, map_bytes = row
-        tiles = list(map_bytes)
-        tiles_2d = [tiles[i*width:(i+1)*width] for i in range(height)]
+        map_data_base64 = base64.b64encode(map_bytes).decode('utf-8')
+        
         return jsonify({
             "id": map_id,
             "width": width,
             "height": height,
-            "tiles": tiles_2d
+            # "tiles": tiles_2d # 移除原来的 tiles 字段
+            "tiles_base64": map_data_base64 # 使用新的 Base64 字段
         })
+        # --- 修改结束 ---
 
 @app.route('/api/maps', methods=['GET'])
 def get_maps():
@@ -76,8 +84,10 @@ def generate_map():
         width = int(world_params['width'])
         height = int(world_params['height'])
 
-        # 生成地图
-        tiles = generate_tiles(
+        # --- 修改开始 ---
+        # 4. 直接调用 CWorldGenerator 实例的方法
+        #    这会返回一个一维列表
+        raw_data_flat = generator.generate_tiles(
             width=width,
             height=height,
             seed_prob=forest_params['seed_prob'],
@@ -88,8 +98,15 @@ def generate_map():
             water_stop_prob=water_params['stop_prob'],
             water_height_influence=water_params['height_influence']
         )
+
+        # 5. 手动将一维列表转换为二维列表 (这是原来 core/world.py 做的事情)
+        tiles = [raw_data_flat[i * width:(i + 1) * width] for i in range(height)]
+        # --- 修改结束 ---
+
     except (KeyError, ValueError, TypeError) as e:
         return jsonify({'error': f'Invalid or missing map generation parameter: {str(e)}'}), 400
+    except Exception as e: # 捕获可能的 C++ 生成器错误
+         return jsonify({'error': f'Map generation failed: {str(e)}'}), 500
 
     # 转成bytes写入数据库
     raw_bytes = bytes([tile for row in tiles for tile in row])
@@ -99,7 +116,7 @@ def generate_map():
         'success': True,
         'map_id': map_id,
         'name': name,
-        'tiles': tiles,
+        'tiles': tiles, # 这里可以直接返回 tiles，因为它已经是二维的了
         'used_params': {
             'world': world_params,
             'forest': forest_params,
@@ -154,13 +171,13 @@ def debug_map_stats(map_id):
     map_data_row = database.get_map_by_id(map_id)
     if not map_data_row:
         return jsonify({"error": "Map not found"}), 404
-        
+
     width, height, map_bytes = map_data_row
     stats = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
     for byte_val in map_bytes:
         if byte_val in stats:
             stats[byte_val] += 1
-            
+
     return jsonify({
         "map_id": map_id,
         "width": width,
