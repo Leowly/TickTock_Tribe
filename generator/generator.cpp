@@ -10,6 +10,7 @@
 #include <random>
 #include <algorithm>
 #include <cstdint>
+#include <iostream> // For debugging print, can be removed
 
 using namespace std;
 
@@ -28,6 +29,13 @@ struct WaterParams
     double stop_prob;
     double height_influence;
 };
+
+// --- 新增：用于返回打包数据的结构 ---
+struct PackedMapResult {
+    uint8_t* data;
+    int size;
+};
+// --- 新增结束 ---
 
 static bool is_within_bounds(int x, int y, int width, int height)
 {
@@ -50,7 +58,7 @@ static double *generate_height_field(int width, int height)
 
     for (int iter = 0; iter < 3; iter++)
     {
-        for (int y = 1; y < height - 1; y++)
+        for (int y = 1; y < height - 1; y++) // Keep smoothing away from edges
         {
             for (int x = 1; x < width - 1; x++)
             {
@@ -68,9 +76,43 @@ static double *generate_height_field(int width, int height)
     return height_arr;
 }
 
+// --- 新增：位打包辅助函数 ---
+// 将一个包含 tile 值 (0-7, fits in 3 bits) 的一维数组打包成字节数组
+uint8_t* pack_bits(const uint8_t* flat_tiles, int num_tiles, int* out_packed_size) {
+    // Calculate the required size for the packed data
+    *out_packed_size = (num_tiles * 3 + 7) / 8; // Equivalent to ceil((num_tiles * 3) / 8.0)
+    uint8_t* packed_data = new uint8_t[*out_packed_size](); // Initialize to 0
+
+    for (int i = 0; i < num_tiles; ++i) {
+        uint8_t value = flat_tiles[i] & 0x07; // Ensure only the lowest 3 bits are used
+        int bit_index = i * 3;
+        int byte_index = bit_index / 8;
+        int bit_offset = bit_index % 8;
+
+        // Place the 3-bit value into the packed data
+        if (bit_offset <= 5) {
+            // Value fits entirely within the current byte
+            packed_data[byte_index] |= (value << (8 - 3 - bit_offset));
+        } else {
+            // Value spans two bytes
+            int bits_in_first_byte = 8 - bit_offset;
+            int bits_in_second_byte = 3 - bits_in_first_byte;
+            packed_data[byte_index] |= (value >> bits_in_second_byte);
+            // Check bounds before writing to the next byte
+            if (byte_index + 1 < *out_packed_size) {
+                packed_data[byte_index + 1] |= (value << (8 - bits_in_second_byte)) & 0xFF;
+            }
+        }
+    }
+    return packed_data;
+}
+// --- 新增结束 ---
+
+
 extern "C"
 {
 
+    EXPORT void free_map(uint8_t *map);
     EXPORT uint8_t *generate_map(int width, int height, ForestParams f_params, WaterParams w_params)
     {
         srand((unsigned int)time(nullptr));
@@ -108,13 +150,15 @@ extern "C"
                                 continue;
                             int nx = x + dx;
                             int ny = y + dy;
+                            // --- 修复：确保邻居在边界内 ---
                             if (is_within_bounds(nx, ny, width, height) && grid[ny * width + nx] == 1)
                             {
                                 count++;
                             }
                         }
                     }
-                    if (grid[y * width + x] == 0 && count >= f_params.birth_threshold)
+                    // --- 修复：确保当前格子在边界内 ---
+                    if (is_within_bounds(x, y, width, height) && grid[y * width + x] == 0 && count >= f_params.birth_threshold)
                     {
                         new_grid[y * width + x] = 1;
                     }
@@ -141,7 +185,8 @@ extern "C"
         {
             int sx = rand() % width;
             int sy = rand() % height;
-            if (grid[sy * width + sx] == 2)
+            // --- 修复：确保源头在边界内 ---
+            if (!is_within_bounds(sx, sy, width, height) || grid[sy * width + sx] == 2)
                 continue;
             grid[sy * width + sx] = 2; // WATER
 
@@ -182,8 +227,9 @@ extern "C"
                         int nx = cx + test_dx;
                         int ny = cy + test_dy;
 
+                        // --- 关键修复：检查下一个点是否在边界内 ---
                         if (!is_within_bounds(nx, ny, width, height))
-                            continue;
+                            continue; // 如果下一个点超出边界，则跳过这个方向
 
                         double current_height = height_field[cy * width + cx];
                         double next_height = height_field[ny * width + nx];
@@ -207,7 +253,11 @@ extern "C"
                     dy = best_dy;
                     cx += dx;
                     cy += dy;
-                    grid[cy * width + cx] = 2;
+                    // --- 关键修复：再次检查要设置的点是否在边界内 ---
+                    if (!is_within_bounds(cx, cy, width, height)) {
+                        break; // 如果计算出的新点超出边界，则停止流线
+                    }
+                    grid[cy * width + cx] = 2; // 设置为水
                 }
             }
         }
@@ -216,8 +266,40 @@ extern "C"
         return grid;
     }
 
+    // --- 新增：生成并打包地图的函数 ---
+    EXPORT PackedMapResult generate_map_packed(int width, int height, ForestParams f_params, WaterParams w_params) {
+        // 1. 生成标准的 uint8_t 地图
+        uint8_t* standard_grid = generate_map(width, height, f_params, w_params);
+        if (!standard_grid) {
+             PackedMapResult result = {nullptr, 0};
+             return result; // Handle generation failure
+        }
+
+        // 2. 计算总格子数
+        int num_tiles = width * height;
+
+        // 3. 调用打包函数
+        int packed_size = 0;
+        uint8_t* packed_data = pack_bits(standard_grid, num_tiles, &packed_size);
+
+        // 4. 释放原始的未打包地图内存
+        free_map(standard_grid);
+
+        // 5. 返回打包后的数据和大小
+        PackedMapResult result;
+        result.data = packed_data;
+        result.size = packed_size;
+        return result;
+    }
+    // --- 新增结束 ---
+
+
     EXPORT void free_map(uint8_t *map)
     {
+        // This function can now free both standard grids and packed grids
+        // as long as the caller treats the packed data as uint8_t*.
+        // The PackedMapResult's size field is for informational purposes
+        // or if a different freeing strategy was needed (it's not here).
         delete[] map;
     }
 

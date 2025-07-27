@@ -5,7 +5,7 @@ class MapViewer {
     this.canvas = canvasElement;
     this.ctx = this.canvas.getContext('2d');
     this.canvas.style.cursor = 'grab';
-    
+
     // --- 更新 TERRAIN_COLORS 以支持新的耕地状态 ---
     // 0: PLAIN, 1: FOREST, 2: WATER, 3: FARM_UNTILLED, 4: FARM_TILLED
     this.TERRAIN_COLORS = { 
@@ -15,9 +15,10 @@ class MapViewer {
       '3': '#9ACD32', // 黄绿色 (YellowGreen) - 未耕种/未成熟耕地
       '4': '#32CD32'  // 酸橙绿 (LimeGreen) - 已耕种/已成熟耕地
     };
-    
+
     this.BASE_TILE_SIZE = 16;
     this.dpr = window.devicePixelRatio || 1;
+
     // 状态
     this.camera = { 
       x: 0, 
@@ -27,10 +28,12 @@ class MapViewer {
       maxZoom: 5, 
       maxVisiblePixels: null  
     };
+
     this.interaction = {
       isDragging: false, isPinching: false, lastX: 0, lastY: 0,
       initialPinchDistance: 0, lastZoom: 1
     };
+
     this.worldData = null;
     this.mapId = null; // 存储当前地图ID
     this.dataRefreshIntervalId = null; // 存储数据刷新定时器ID
@@ -42,16 +45,19 @@ class MapViewer {
 
   constrainCamera() {
     if (!this.worldData) return;
+
     const currentTileSize = this.BASE_TILE_SIZE * this.camera.zoom;
     const worldPixelWidth = this.worldData.width * currentTileSize;
     const worldPixelHeight = this.worldData.height * currentTileSize;
     const viewWidth = window.innerWidth;
     const viewHeight = window.innerHeight;
+
     if (worldPixelWidth < viewWidth) {
       this.camera.x = (worldPixelWidth - viewWidth) / 2;
     } else {
       this.camera.x = Math.max(0, Math.min(this.camera.x, worldPixelWidth - viewWidth));
     }
+
     if (worldPixelHeight < viewHeight) {
       this.camera.y = (worldPixelHeight - viewHeight) / 2;
     } else {
@@ -59,31 +65,84 @@ class MapViewer {
     }
   }
 
+  // --- 新增辅助函数：解包 3-bit 数据 ---
+  unpack3BitBytes(packedBytes, width, height) {
+    const totalTiles = width * height;
+    const expectedPackedSize = Math.ceil((totalTiles * 3) / 8);
+    if (packedBytes.length !== expectedPackedSize) {
+        console.warn(`Unpack: Expected ${expectedPackedSize} bytes for ${width}x${height} map, got ${packedBytes.length}.`);
+        // 可以选择抛出错误或尝试处理
+        // throw new Error(`Data size mismatch during unpacking.`);
+    }
+
+    const flatGrid = new Uint8Array(totalTiles);
+    const packedData = packedBytes; // Uint8Array
+
+    for (let i = 0; i < totalTiles; i++) {
+        const bitIndex = i * 3;
+        const byteIndex = Math.floor(bitIndex / 8);
+        const bitOffset = bitIndex % 8;
+
+        let value = 0;
+        if (bitOffset <= 5) { // 完全在一个字节内或在边界上
+            const mask = 0b111; // (1 << 3) - 1
+            value = (packedData[byteIndex] >> (8 - 3 - bitOffset)) & mask;
+        } else { // 跨越两个字节
+            const bitsInFirstByte = 8 - bitOffset;
+            const bitsInSecondByte = 3 - bitsInFirstByte;
+            const part1 = (packedData[byteIndex] & ((1 << bitsInFirstByte) - 1)) << bitsInSecondByte;
+            let part2 = 0;
+            if (byteIndex + 1 < packedData.length) {
+                part2 = (packedData[byteIndex + 1] >> (8 - bitsInSecondByte)) & ((1 << bitsInSecondByte) - 1);
+            } // 如果没有下一个字节，默认 part2 为 0
+            value = part1 | part2;
+        }
+        flatGrid[i] = value;
+    }
+    return flatGrid;
+  }
+  // --- 新增辅助函数结束 ---
+
   draw() {
-    if (!this.worldData || !this.worldData.grid || !this.worldData.grid.length) return;
+    // 修改校验条件，检查 flatGrid
+    if (!this.worldData || !this.worldData.flatGrid || this.worldData.flatGrid.length === 0) return;
+
     this.ctx.fillStyle = '#000000';
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
     this.ctx.save();
     this.ctx.scale(this.dpr, this.dpr);
+
     const currentTileSize = this.BASE_TILE_SIZE * this.camera.zoom;
     const startX = Math.floor(this.camera.x / currentTileSize);
     const startY = Math.floor(this.camera.y / currentTileSize);
     const endX = Math.ceil((this.camera.x + window.innerWidth) / currentTileSize);
     const endY = Math.ceil((this.camera.y + window.innerHeight) / currentTileSize);
+
     for (let y = startY; y < endY; y++) {
       for (let x = startX; x < endX; x++) {
         if (x < 0 || y < 0 || x >= this.worldData.width || y >= this.worldData.height) continue;
-        const tileType = this.worldData.grid[y]?.[x];
+        
+        // --- 修改：通过一维索引直接访问 flatGrid ---
+        const index = y * this.worldData.width + x;
+        const tileType = this.worldData.flatGrid[index];
+        // --- 修改结束 ---
+
         if (tileType === undefined) continue;
+
         // --- 使用更新后的 TERRAIN_COLORS ---
         const color = this.TERRAIN_COLORS[tileType] || '#FF00FF'; // 默认洋红色表示未知类型
+
         const screenX = x * currentTileSize - this.camera.x;
         const screenY = y * currentTileSize - this.camera.y;
+
         if (!isFinite(screenX) || !isFinite(screenY)) continue;
+
         this.ctx.fillStyle = color;
         this.ctx.fillRect(screenX, screenY, currentTileSize + 1, currentTileSize + 1);
       }
     }
+
     this.ctx.restore();
   }
 
@@ -95,24 +154,31 @@ class MapViewer {
       this.interaction.lastY = e.clientY;
       this.canvas.style.cursor = 'grabbing';
     });
+
     this.canvas.addEventListener('mousemove', (e) => {
       if (!this.interaction.isDragging) return;
+
       const dx = e.clientX - this.interaction.lastX;
       const dy = e.clientY - this.interaction.lastY;
+
       this.camera.x -= dx;
       this.camera.y -= dy;
       this.constrainCamera();
+
       this.interaction.lastX = e.clientX;
       this.interaction.lastY = e.clientY;
     });
+
     this.canvas.addEventListener('mouseup', () => {
       this.interaction.isDragging = false;
       this.canvas.style.cursor = 'grab';
     });
+
     this.canvas.addEventListener('mouseleave', () => {
       this.interaction.isDragging = false;
       this.canvas.style.cursor = 'grab';
     });
+
     // 滚轮事件 - 添加 passive 标记
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
@@ -120,6 +186,7 @@ class MapViewer {
       this.zoomAtPoint(e.clientX, e.clientY, zoomAmount);
       this.constrainCamera();
     }, { passive: false });
+
     // 触摸事件
     this.canvas.addEventListener('touchstart', (e) => {
       if (e.touches.length === 1) {
@@ -133,12 +200,15 @@ class MapViewer {
         this.interaction.lastZoom = this.camera.zoom;
       }
     }, { passive: true });
+
     this.canvas.addEventListener('touchmove', (e) => {
       if (this.interaction.isDragging && e.touches.length === 1) {
         const dx = e.touches[0].clientX - this.interaction.lastX;
         const dy = e.touches[0].clientY - this.interaction.lastY;
+
         this.camera.x -= dx;
         this.camera.y -= dy;
+
         this.interaction.lastX = e.touches[0].clientX;
         this.interaction.lastY = e.touches[0].clientY;
       } else if (this.interaction.isPinching && e.touches.length === 2) {
@@ -150,9 +220,11 @@ class MapViewer {
           this.camera.minZoom,
           Math.min(this.camera.maxZoom, this.interaction.lastZoom * zoomFactor)
         );
+
         // 计算两指中心点
         const centerX = (p1.clientX + p2.clientX) / 2;
         const centerY = (p1.clientY + p2.clientY) / 2;
+
         // 应用“缩放 + 平移”逻辑（复用 zoomAtPoint）
         const zoomChange = newZoom / this.camera.zoom;
         this.zoomAtPoint(centerX, centerY, zoomChange);
@@ -199,7 +271,9 @@ class MapViewer {
   zoomAtPoint(mouseX, mouseY, zoomChange) {
     const worldX = (mouseX + this.camera.x) / this.camera.zoom;
     const worldY = (mouseY + this.camera.y) / this.camera.zoom;
+
     this.camera.zoom = Math.max(this.camera.minZoom, Math.min(this.camera.maxZoom, this.camera.zoom * zoomChange));
+
     const newZoom = this.camera.zoom;
     this.camera.x = worldX * newZoom - mouseX;
     this.camera.y = worldY * newZoom - mouseY;
@@ -260,104 +334,131 @@ class MapViewer {
           // 不弹窗警告用户，因为页面可能正在卸载
       }
   }
-    async loadMapData() {
-        if (this.mapId === null) {
-            throw new Error("Map ID is not set");
+
+  async loadMapData() {
+    if (this.mapId === null) {
+        throw new Error("Map ID is not set");
+    }
+    
+    const response = await fetch(`/api/maps/${this.mapId}`);
+    
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error("地图未找到 (404)");
         }
-        // console.log(`Refreshing data for map ${this.mapId}`); // 调试用
-        const response = await fetch(`/api/maps/${this.mapId}`);
-        if (!response.ok) {
-            if (response.status === 404) {
-                throw new Error("地图未找到 (404)");
-            }
-            throw new Error(`Failed to load map: ${response.status} ${response.statusText}`);
+        // 尝试解析错误 JSON，如果失败则使用状态文本
+        let errorMsg = `Failed to load map: ${response.status} ${response.statusText}`;
+        try {
+            const errorData = await response.json();
+            errorMsg = errorData.error || errorMsg;
+        } catch (e) {
+            // 忽略 JSON 解析错误，使用默认消息
         }
+        throw new Error(errorMsg);
+    }
+
+    const contentType = response.headers.get('Content-Type');
+    // --- 修改：处理 Base64 编码的 3-bit 打包数据 ---
+    if (contentType && contentType.includes('application/json')) {
         const data = await response.json();
         
-        // --- 修改开始：处理 Base64 数据 ---
+        if (data.error) {
+             throw new Error(data.error);
+        }
+        
         if (data.tiles_base64) {
             try {
                 // 1. 解码 Base64 字符串为二进制字符串
                 const binaryString = atob(data.tiles_base64);
-                
                 // 2. 将二进制字符串转换为 Uint8Array
-                //    (更高效的方法是直接从 binaryString 创建，但为了清晰起见，我们先转成 ArrayBuffer)
                 const len = binaryString.length;
-                const bytes = new Uint8Array(len);
+                const packedBytes = new Uint8Array(len);
                 for (let i = 0; i < len; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
+                    packedBytes[i] = binaryString.charCodeAt(i);
                 }
-                
-                // 3. 如果需要二维数组 (map-viewer.js 的 draw 方法目前需要二维数组)
-                //    将一维 Uint8Array 转换为二维数组
-                const grid_2d = [];
-                for (let y = 0; y < data.height; y++) {
-                     const row = [];
-                     for (let x = 0; x < data.width; x++) {
-                         row.push(bytes[y * data.width + x]);
-                     }
-                     grid_2d.push(row);
-                }
-                
-                // 4. 更新 worldData
+
+                // 3. 解包 3-bit 数据
+                const flatGrid = this.unpack3BitBytes(packedBytes, data.width, data.height);
+
+                // 4. 更新 worldData，存储解包后的一维数组
                 if (this.worldData) {
-                    this.worldData.grid = grid_2d; // 使用转换后的二维数组
+                    this.worldData.flatGrid = flatGrid; 
                     this.worldData.width = data.width;
                     this.worldData.height = data.height;
                 } else {
                     this.worldData = {
                         width: data.width,
                         height: data.height,
-                        grid: grid_2d // 使用转换后的二维数组
+                        flatGrid: flatGrid 
                     };
                 }
-    
-                // --- 可选优化 (如果 draw 方法能直接处理 Uint8Array) ---
-                // 如果你修改了 draw 方法以直接使用 Uint8Array，可以这样做：
-                // if (this.worldData) {
-                //     this.worldData.flatGrid = bytes; // 存储一维数组
-                //     this.worldData.width = data.width;
-                //     this.worldData.height = data.height;
-                //     // 确保 draw 方法不再依赖 this.worldData.grid
-                // } else {
-                //     this.worldData = {
-                //         width: data.width,
-                //         height: data.height,
-                //         flatGrid: bytes // 存储一维数组
-                //     };
-                // }
-                // --- 可选优化结束 ---
-                
+
             } catch (e) {
-                 console.error("Error decoding base64 map ", e);
-                 throw new Error("Failed to decode map data received from server.");
+                 console.error("Error decoding or unpacking base64 map data:", e);
+                 throw new Error("Failed to process map data received from server.");
             }
         } else {
-             // 如果服务器仍然返回旧的 tiles 结构（为了向后兼容或过渡）
+             // 如果服务器返回了旧的 tiles 结构（为了向后兼容或过渡）
              if (data.tiles && Array.isArray(data.tiles)) {
+                 // 如果需要兼容旧数据，可以在这里转换为 flatGrid
+                 // 但根据优化目标，应主要处理 tiles_base64
+                 console.warn('Received legacy "tiles" data structure, not optimized.');
+                 const flatGridLegacy = new Uint8Array(data.tiles.flat());
                  if (this.worldData) {
-                     this.worldData.grid = data.tiles;
+                     this.worldData.flatGrid = flatGridLegacy;
                      this.worldData.width = data.width;
                      this.worldData.height = data.height;
                  } else {
                      this.worldData = {
                          width: data.width,
                          height: data.height,
-                         grid: data.tiles
+                         flatGrid: flatGridLegacy
                      };
                  }
              } else {
-                 throw new Error('Invalid map data structure received from server: missing tiles_base64 or tiles');
+                 throw new Error('Invalid map data structure received from server: missing tiles_base64');
              }
         }
-    // --- 修改结束 ---
-    
-    // 保留原有的校验
-    if (!this.worldData.grid || !this.worldData.grid.length) {
-         // 注意：如果使用 flatGrid，这里的校验也需要调整
-        throw new Error('Invalid map data structure received from server');
+        
+        // --- 修改：校验 worldData.flatGrid ---
+        if (!this.worldData || !this.worldData.flatGrid || this.worldData.flatGrid.length === 0) {
+            throw new Error('Invalid or empty unpacked map data structure received from server');
+        }
+        
+    } else if (contentType && contentType.includes('application/octet-stream')) {
+        // --- 如果后端改为直接传输二进制流 ---
+        // 这部分代码是为未来可能的优化准备的
+        /*
+        const arrayBuffer = await response.arrayBuffer();
+        const packedBytes = new Uint8Array(arrayBuffer);
+        
+        // 需要预先知道 width 和 height，这可能需要一个单独的 API 调用
+        // 或者在二进制流的头部包含元数据
+        // 假设 width 和 height 已知或通过其他方式获取
+        const data_width = this.worldData?.width || 1000; // 示例默认值
+        const data_height = this.worldData?.height || 1000; // 示例默认值
+
+        const flatGrid = this.unpack3BitBytes(packedBytes, data_width, data_height);
+
+        if (this.worldData) {
+            this.worldData.flatGrid = flatGrid;
+            // this.worldData.width = data_width;  // 假设不变或已知
+            // this.worldData.height = data_height; // 假设不变或已知
+        } else {
+            this.worldData = {
+                width: data_width,
+                height: data_height,
+                flatGrid: flatGrid
+            };
+        }
+        */
+        throw new Error("Direct binary stream loading is not yet implemented in this version of the viewer.");
+        
+    } else {
+        throw new Error(`Unexpected Content-Type from server: ${contentType}`);
     }
-}
+    // --- 修改结束 ---
+  }
 
   // --- 修改 initialize 方法 ---
   async initialize() {
@@ -369,19 +470,18 @@ class MapViewer {
       if (isNaN(this.mapId)) {
         throw new Error('Invalid map ID in URL');
       }
-
+      
       // 先加载配置
       const configRes = await fetch('/api/config');
       const config = await configRes.json();
       this.camera.maxVisiblePixels = config.view.max_visible_pixels;
-      this.updateMinZoom();
-
+      
       // --- 启动模拟 ---
       await this.startSimulation();
-
+      
       // --- 加载初始地图数据 ---
       await this.loadMapData();
-
+      
       // --- 设置定期数据刷新 ---
       // 每 1000 毫秒 (1秒) 刷新一次数据
       this.dataRefreshIntervalId = setInterval(async () => {
@@ -393,7 +493,7 @@ class MapViewer {
               // 可以添加更健壮的错误处理
           }
       }, 1000); 
-
+      
       // --- 相机和循环设置 ---
       this.updateMinZoom();
       const initialTileSize = this.BASE_TILE_SIZE * this.camera.zoom;
@@ -401,7 +501,6 @@ class MapViewer {
       this.camera.y = (this.worldData.height * initialTileSize - window.innerHeight) / 2;
       this.constrainCamera();
       this.startGameLoop();
-
     } catch (error) {
       console.error("初始化失败:", error);
       // 停止任何可能已启动的刷新循环
