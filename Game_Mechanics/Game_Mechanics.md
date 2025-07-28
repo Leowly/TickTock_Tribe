@@ -1,6 +1,6 @@
 # Game Mechanics & Systems Design
 
-## 1. Core Philosophy: A Needs-Driven Simulation
+## 1. Core: A Needs-Driven Simulation
 
 The world of TickTock Tribe is a persistent simulation driven by the actions of autonomous agents called **Villagers**. Every action a Villager takes is motivated by a hierarchical set of needs. This "Needs-Driven AI" forms the core of the simulation, creating emergent behavior and a dynamic, evolving world.
 
