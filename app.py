@@ -5,6 +5,7 @@ from generator.c_world_generator import CWorldGenerator
 from core import database
 from core.ticker import ticker_instance
 from core.world_updater import world_updater_instance
+from core.world_updater import unpack_3bit_bytes
 import base64
 
 app = Flask(__name__)
@@ -205,79 +206,37 @@ def simulation_status(map_id):
 # --- 修改开始：调试统计接口 ---
 @app.route("/api/debug/map_stats/<int:map_id>", methods=["GET"])
 def debug_map_stats(map_id):
-    """临时调试接口：返回地图统计数据 (适配 3-bit 打包数据)"""
+    """调试接口：返回地图统计数据 (使用正确的解包函数)"""
     map_data_row = database.get_map_by_id(map_id)
     if not map_data_row:
         return jsonify({"error": "Map not found"}), 404
 
     width, height, packed_map_bytes = map_data_row
 
-    # --- 修改：解包 3-bit 数据来统计 ---
-    stats = {
-        0: 0,
-        1: 0,
-        2: 0,
-        3: 0,
-        4: 0,
-        5: 0,
-        6: 0,
-        7: 0,
-    }  # 初始化所有可能的 3-bit 值 (0-7)
+    # --- 修改：调用正确的、可复用的解包函数 ---
+    try:
+        grid_2d = unpack_3bit_bytes(packed_map_bytes, width, height)
+    except Exception as e:
+        return jsonify({"error": f"Failed to unpack map data: {str(e)}"}), 500
 
+    # --- 现在可以直接在解包后的二维列表上进行统计，更简单也更可靠 ---
+    stats = {i: 0 for i in range(8)} # 初始化所有可能的 3-bit 值 (0-7)
+
+    for y in range(height):
+        for x in range(width):
+            tile_value = grid_2d[y][x]
+            if tile_value in stats:
+                stats[tile_value] += 1
+    
     total_tiles = width * height
-    # 遍历打包的数据并解包计数
-    for i in range(total_tiles):
-        byte_index = (i * 3) // 8
-        bit_offset = (i * 3) % 8
-
-        if byte_index >= len(packed_map_bytes):
-            # 数据不完整或越界
-            print(
-                f"Warning: Incomplete packed data for map {map_id} while calculating stats."
-            )
-            break
-
-        if bit_offset > 5:  # 跨越两个字节 (假设使用之前讨论的打包方式)
-            # 处理跨字节的情况
-            bits_in_first_byte = 8 - bit_offset
-            bits_in_second_byte = 3 - bits_in_first_byte
-            # 确保不越界
-            if byte_index + 1 < len(packed_map_bytes):
-                part1 = (packed_map_bytes[byte_index] >> bit_offset) & (
-                    (1 << bits_in_first_byte) - 1
-                )
-                part2 = (
-                    packed_map_bytes[byte_index + 1] & ((1 << bits_in_second_byte) - 1)
-                ) << bits_in_first_byte
-                tile_value = part1 | part2
-            else:
-                # 如果第二个字节不存在，则只取第一个字节的部分（可能导致数据不准确）
-                part1 = (packed_map_bytes[byte_index] >> bit_offset) & (
-                    (1 << bits_in_first_byte) - 1
-                )
-                tile_value = part1
-        else:
-            # 在一个字节内
-            mask = (1 << 3) - 1  # 0b111
-            tile_value = (packed_map_bytes[byte_index] >> bit_offset) & mask
-
-        # 只统计有效的地形值 (0-4)
-        if tile_value in stats:
-            stats[tile_value] += 1
-        else:
-            # 可选：记录无效值
-            print(
-                f"Warning: Found unexpected tile value {tile_value} at index {i} in map {map_id}"
-            )
-
     # --- 修改结束 ---
+    
     return jsonify(
         {
             "map_id": map_id,
             "width": width,
             "height": height,
-            # "total_tiles": len(map_bytes), # 原来的 len(map_bytes) 不再是 tile 数量
-            "total_tiles": total_tiles,  # 使用计算出的总 tile 数
+            "total_tiles": total_tiles,
             "stats": stats,
             "readable_stats": {
                 "PLAIN (0)": stats.get(0, 0),
@@ -285,7 +244,6 @@ def debug_map_stats(map_id):
                 "WATER (2)": stats.get(2, 0),
                 "FARM_UNTILLED (3)": stats.get(3, 0),
                 "FARM_TILLED (4)": stats.get(4, 0),
-                # 可以包含 5, 6, 7 如果想看是否有无效数据
             },
         }
     )

@@ -50,6 +50,14 @@
 *   `templates/`: Flask HTML 模板。
 *   `static/`: 静态资源（JavaScript, CSS）。
 *   `database/`: SQLite 数据库存放目录。
+*   `Game_Mechanics/`: 包含详细游戏机制设计的文档。
+
+## 📜 游戏机制 (Game Mechanics)
+
+关于游戏核心玩法、系统设计和数值的详细说明，请参阅以下文档：
+
+*   **[游戏机制设计 (中文版)](./Game_Mechanics/游戏机制设计.md)**
+*   **[Game Mechanics Design (English)](./Game_Mechanics/Game_Mechanics.md)**
 
 ## 📜 许可证
 
