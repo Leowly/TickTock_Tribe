@@ -35,20 +35,13 @@
           console.error("Canvas element not found!");
         }
       });
-
-      // --- 添加 beforeunload 事件监听器 ---
       // 当用户关闭页面、刷新页面或导航到其他页面时触发
       window.addEventListener('beforeunload', (event) => {
         console.log("Page is about to unload. Cleaning up...");
         if (viewerInstance) {
-           viewerInstance.destroy(); // 调用 destroy 方法停止刷新和模拟
-           // 注意：浏览器可能不会等待异步操作（如 fetch）完成
+           viewerInstance.destroy();
         }
-        // 根据需要，你可以设置 returnValue 来显示确认对话框（现代浏览器可能忽略自定义消息）
-        // event.returnValue = '确定要离开吗？模拟将会停止。'; 
-        // return event.returnValue;
       });
-
     })(); // IIFE 结束
   </script>
 </body>

@@ -12,8 +12,8 @@ class MapViewer {
       '0': '#F0E68C', // 浅绿黄色 (Khaki) - 平原
       '1': '#228B22', // 森林绿 (ForestGreen) - 森林
       '2': '#1E90FF', // 道奇蓝 (DodgerBlue) - 水源
-      '3': '#9ACD32', // 黄绿色 (YellowGreen) - 未耕种/未成熟耕地
-      '4': '#32CD32'  // 酸橙绿 (LimeGreen) - 已耕种/已成熟耕地
+      '3': '#9ACD32', // 黄绿色 (YellowGreen) - 未成熟耕地
+      '4': '#32CD32'  // 酸橙绿 (LimeGreen) - 已成熟耕地
     };
 
     this.BASE_TILE_SIZE = 16;
@@ -426,32 +426,6 @@ class MapViewer {
         }
         
     } else if (contentType && contentType.includes('application/octet-stream')) {
-        // --- 如果后端改为直接传输二进制流 ---
-        // 这部分代码是为未来可能的优化准备的
-        /*
-        const arrayBuffer = await response.arrayBuffer();
-        const packedBytes = new Uint8Array(arrayBuffer);
-        
-        // 需要预先知道 width 和 height，这可能需要一个单独的 API 调用
-        // 或者在二进制流的头部包含元数据
-        // 假设 width 和 height 已知或通过其他方式获取
-        const data_width = this.worldData?.width || 1000; // 示例默认值
-        const data_height = this.worldData?.height || 1000; // 示例默认值
-
-        const flatGrid = this.unpack3BitBytes(packedBytes, data_width, data_height);
-
-        if (this.worldData) {
-            this.worldData.flatGrid = flatGrid;
-            // this.worldData.width = data_width;  // 假设不变或已知
-            // this.worldData.height = data_height; // 假设不变或已知
-        } else {
-            this.worldData = {
-                width: data_width,
-                height: data_height,
-                flatGrid: flatGrid
-            };
-        }
-        */
         throw new Error("Direct binary stream loading is not yet implemented in this version of the viewer.");
         
     } else {

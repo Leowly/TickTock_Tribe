@@ -55,4 +55,5 @@ dist/
 *.~*
 .python-version
 collect.sh
+collect.ps1
 集合.txt

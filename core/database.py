@@ -3,9 +3,24 @@ import os
 import sqlite3
 from contextlib import closing
 import logging
+from typing import Optional, List, Dict, Tuple, Any
+
+# --- 定义自定义异常 ---
+class DatabaseError(Exception):
+    """数据库操作相关的基础异常"""
+    pass
+
+class MapNotFoundError(DatabaseError):
+    """找不到指定地图的异常"""
+    pass
+
+class InvalidInputError(DatabaseError):
+    """输入参数无效的异常"""
+    pass
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
+# 注意：logging.basicConfig 通常在应用入口 (app.py) 设置一次即可
+# logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # core目录
 DATA_DIR = os.path.join(BASE_DIR, '..', 'database')
@@ -14,9 +29,11 @@ os.makedirs(DATA_DIR, exist_ok=True)  # 确保目录存在
 DB_PATH = os.path.join(DATA_DIR, 'world_maps.db')
 
 def get_connection():
+    """获取数据库连接"""
     return sqlite3.connect(DB_PATH)
 
 def init_db():
+    """初始化数据库，创建所需表格"""
     with get_connection() as conn:
         conn.execute('''
         CREATE TABLE IF NOT EXISTS world_maps (
@@ -28,38 +45,100 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         ''')
+        # --- Houses 表 ---
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS houses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            map_id INTEGER NOT NULL,
+            x INTEGER NOT NULL,
+            y INTEGER NOT NULL,
+            capacity INTEGER NOT NULL CHECK(capacity BETWEEN 1 AND 4),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (map_id) REFERENCES world_maps (id) ON DELETE CASCADE
+        )
+        ''')
+        # --- Villagers 表 ---
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS villagers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            house_id INTEGER,
+            name TEXT,
+            status TEXT DEFAULT 'idle',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (house_id) REFERENCES houses (id) ON DELETE SET NULL
+        )
+        ''')
         conn.commit()
 
-def insert_map(name: str, width: int, height: int, map_bytes: bytes):
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        with conn:
-            cursor = conn.execute(
-                "INSERT INTO world_maps (name, width, height, map_data) VALUES (?, ?, ?, ?)",
-                (name, width, height, map_bytes)
-            )
-            map_id = cursor.lastrowid
-            print(f"Database: Inserted new map '{name}' with ID {map_id}") # 添加打印
-            return map_id # 返回 ID
+# --- World Maps 表操作函数 ---
+def insert_map(name: str, width: int, height: int, map_bytes: bytes) -> Optional[int]:
+    """
+    插入一张新地图到数据库。
+    Args:
+        name: 地图名称。
+        width: 地图宽度。
+        height: 地图高度。
+        map_bytes: 地图的 3-bit 打包数据。
+    Returns:
+        Optional[int]: 新插入地图的 ID。
+    Raises:
+        DatabaseError: 如果插入地图失败。
+    """
+    try:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
+            with conn:
+                cursor = conn.execute(
+                    "INSERT INTO world_maps (name, width, height, map_data) VALUES (?, ?, ?, ?)",
+                    (name, width, height, map_bytes)
+                )
+                map_id = cursor.lastrowid
+                if map_id is not None:
+                    logger.info(f"Database: Inserted new map '{name}' with ID {map_id}")
+                    return map_id
+                # 正常插入后 lastrowid 不应为 None，如果为 None 则说明有问题
+                raise DatabaseError(f"Failed to retrieve lastrowid for map '{name}' after insertion.")
+    except Exception as e:
+        logger.error(f"Database: Failed to insert map '{name}': {e}")
+        raise DatabaseError(f"Failed to insert map '{name}'") from e
 
-def get_maps_list():
+def get_maps_list() -> List[Tuple[int, str, int, int, Any]]:
+    """
+    获取所有地图的列表（不包含地图数据本身）。
+    Returns:
+        list: 包含地图信息元组的列表 [(id, name, width, height, created_at), ...]。
+    """
     with closing(sqlite3.connect(DB_PATH)) as conn:
         cursor = conn.execute("SELECT id, name, width, height, created_at FROM world_maps ORDER BY created_at DESC")
         maps = cursor.fetchall()
-        print(f"Database: Fetched list of {len(maps)} maps") # 添加打印
+        logger.debug(f"Database: Fetched list of {len(maps)} maps")
         return maps
 
-def get_map_by_id(map_id: int):
+def get_map_by_id(map_id: int) -> Optional[Tuple[int, int, bytes]]:
+    """
+    根据 ID 获取地图的元数据和数据。
+    Args:
+        map_id: 地图 ID。
+    Returns:
+        tuple or None: (width, height, map_data) 或 None (如果未找到)。
+    """
     with closing(sqlite3.connect(DB_PATH)) as conn:
         cursor = conn.execute("SELECT width, height, map_data FROM world_maps WHERE id=?", (map_id,))
         row = cursor.fetchone()
         if row:
-            print(f"Database: Retrieved map data for ID {map_id}") # 添加打印
+            logger.debug(f"Database: Retrieved map data for ID {map_id}")
         else:
-            print(f"Database: Map with ID {map_id} not found") # 添加打印
+            logger.warning(f"Database: Map with ID {map_id} not found")
         return row
 
 def update_map_data(map_id: int, map_bytes: bytes) -> bool:
-    """更新指定地图的 map_data 字段，写入整个数据块"""
+    """
+    更新指定地图的 map_data 字段。
+    Args:
+        map_id: 地图 ID。
+        map_bytes: 新的地图 3-bit 打包数据。
+    Returns:
+        bool: 是否更新成功。
+    """
     try:
         with closing(sqlite3.connect(DB_PATH)) as conn:
             with conn:
@@ -71,7 +150,7 @@ def update_map_data(map_id: int, map_bytes: bytes) -> bool:
                     logger.warning(f"数据库更新失败：地图ID {map_id} 不存在。")
                     return False
 
-                # 尽量减少查询次数，合并查询名称
+                # 可选：获取地图名用于日志
                 name_row = conn.execute(
                     "SELECT name FROM world_maps WHERE id = ?", (map_id,)
                 ).fetchone()
@@ -82,121 +161,162 @@ def update_map_data(map_id: int, map_bytes: bytes) -> bool:
         logger.error(f"更新地图数据时发生异常，地图ID {map_id}，错误信息：{e}")
         return False
 
-# --- 新增：直接操作 3-bit 打包数据的函数 ---
-
-def get_tile_packed(map_id: int, x: int, y: int, width: int, height: int, packed_map_bytes: bytes) -> int:
+def delete_map(map_id: int) -> bool:
     """
-    从 3-bit 打包的字节数据中直接读取指定坐标的瓦片值。
-    为了效率，这个函数不直接查询数据库，而是需要调用者提供必要的参数。
-    这避免了在循环中反复查询数据库。
+    根据 ID 删除地图。
     Args:
-        map_id: 地图ID (仅用于日志和错误处理)。
-        x: 瓦片的 x 坐标。
-        y: 瓦片的 y 坐标。
-        width: 地图的宽度。
-        height: 地图的高度。
-        packed_map_bytes: 包含 3-bit 打包数据的 bytes 对象。
+        map_id: 地图 ID。
     Returns:
-        int: 瓦片的值 (0-7)。
-    Raises:
-        ValueError: 如果坐标无效。
-        IndexError: 如果计算出的位索引超出 packed_map_bytes 范围（数据可能损坏）。
+        bool: 是否删除成功。
     """
-    if not (0 <= x < width and 0 <= y < height):
-        raise ValueError(f"坐标 ({x}, {y}) 超出地图范围（宽:{width}, 高:{height}）。")
+    try:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
+            with conn:
+                cursor = conn.execute("DELETE FROM world_maps WHERE id=?", (map_id,))
+                if cursor.rowcount > 0:
+                    logger.info(f"Database: Deleted map with ID {map_id}")
+                    return True
+                else:
+                    logger.warning(f"Database: Attempted to delete map ID {map_id}, but it was not found.")
+                    return False
+    except Exception as e:
+        logger.error(f"删除地图时发生异常，地图ID {map_id}，错误信息：{e}")
+        return False
 
-    total_tiles = width * height
-    expected_packed_size = (total_tiles * 3 + 7) // 8
-    if len(packed_map_bytes) != expected_packed_size:
-         logger.warning(f"get_tile_packed: 数据大小 ({len(packed_map_bytes)}) 与预期 ({expected_packed_size}) 不符，地图ID {map_id}。")
-
-    i = y * width + x  # 一维索引
-    bit_index = i * 3
-    byte_index = bit_index // 8
-    bit_offset = bit_index % 8
-
-    # 使用 bytearray 便于索引 (虽然 bytes 也可以)
-    packed_data = packed_map_bytes
-
-    if byte_index >= len(packed_data):
-        raise IndexError(f"计算出的字节索引 {byte_index} 超出数据范围 {len(packed_data)}，地图ID {map_id}。")
-
-    value = 0
-    if bit_offset <= 5: # 完全在一个字节内或在边界上
-        mask = (1 << 3) - 1 # 0b111
-        value = (packed_data[byte_index] >> (8 - 3 - bit_offset)) & mask
-    else: # 跨越两个字节
-        bits_in_first_byte = 8 - bit_offset
-        bits_in_second_byte = 3 - bits_in_first_byte
-        part1 = (packed_data[byte_index] & ((1 << bits_in_first_byte) - 1)) << bits_in_second_byte
-        # 检查是否有第二个字节
-        if byte_index + 1 < len(packed_data):
-            part2 = (packed_data[byte_index + 1] >> (8 - bits_in_second_byte)) & ((1 << bits_in_second_byte) - 1)
-        else:
-            part2 = 0 # 如果没有下一个字节，默认为0 (或根据需要处理边界)
-            logger.debug(f"get_tile_packed: 瓦片 ({x},{y}) 的值跨越字节边界，但下一个字节不存在，地图ID {map_id}。")
-        value = part1 | part2
-
-    return value
-
-def update_tile_packed(map_id: int, x: int, y: int, new_tile_value: int, width: int, height: int, packed_map_bytes: bytes) -> bytes:
+# --- Houses 表操作函数 ---
+def insert_house(map_id: int, x: int, y: int, capacity: int) -> Optional[int]:
     """
-    在 3-bit 打包的字节数据中直接修改指定坐标的瓦片值，并返回更新后的 bytes。
-    同样，为了效率，这个函数不直接操作数据库。
+    在指定地图上插入一个新房子。
     Args:
-        map_id: 地图ID (仅用于日志和错误处理)。
-        x: 瓦片的 x 坐标。
-        y: 瓦片的 y 坐标。
-        new_tile_value: 新的瓦片值 (0-7)。
-        width: 地图的宽度。
-        height: 地图的高度。
-        packed_map_bytes: 包含 3-bit 打包数据的原始 bytes 对象。
+        map_id: 所属地图ID。
+        x: 房子x坐标。
+        y: 房子y坐标。
+        capacity: 房子容量 (1-4)。
     Returns:
-        bytes: 更新后的 3-bit 打包数据。
+        Optional[int]: 新插入房子的 ID。
     Raises:
-        ValueError: 如果坐标或值无效。
-        IndexError: 如果计算出的位索引超出范围。
+        InvalidInputError: 如果 capacity 无效。
+        DatabaseError: 如果数据库插入失败（如外键约束违反）。
     """
-    if not (0 <= x < width and 0 <= y < height):
-        raise ValueError(f"坐标 ({x}, {y}) 超出地图范围（宽:{width}, 高:{height}）。")
-    if not (0 <= new_tile_value <= 7):
-         logger.warning(f"update_tile_packed: 瓦片值 {new_tile_value} 超出 3-bit 范围 (0-7)，地图ID {map_id}。已截断。")
-         new_tile_value = max(0, min(7, new_tile_value))
+    if not (1 <= capacity <= 4):
+        error_msg = f"Invalid house capacity: {capacity}. Must be between 1 and 4."
+        logger.error(f"Tried to insert house with invalid capacity: {capacity}")
+        raise InvalidInputError(error_msg)
 
-    total_tiles = width * height
-    expected_packed_size = (total_tiles * 3 + 7) // 8
-    if len(packed_map_bytes) != expected_packed_size:
-         logger.warning(f"update_tile_packed: 数据大小 ({len(packed_map_bytes)}) 与预期 ({expected_packed_size}) 不符，地图ID {map_id}。")
+    try:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
+            with conn:
+                cursor = conn.execute(
+                    "INSERT INTO houses (map_id, x, y, capacity) VALUES (?, ?, ?, ?)",
+                    (map_id, x, y, capacity)
+                )
+                house_id = cursor.lastrowid
+                if house_id is not None:
+                    logger.info(f"Database: Inserted new house (ID: {house_id}) on map {map_id} at ({x}, {y}) with capacity {capacity}")
+                    return house_id
+                raise DatabaseError(f"Failed to retrieve lastrowid for house on map {map_id}.")
+    except sqlite3.IntegrityError as e:
+        error_msg = f"Database constraint failed when inserting house on map {map_id} at ({x}, {y}): {e}"
+        logger.error(error_msg)
+        raise DatabaseError(error_msg) from e
+    except Exception as e:
+        error_msg = f"Unexpected error inserting house on map {map_id} at ({x}, {y}): {e}"
+        logger.error(error_msg)
+        raise DatabaseError(error_msg) from e
 
-    # 将 bytes 转换为 bytearray 以便修改
-    packed_data = bytearray(packed_map_bytes)
-    i = y * width + x # 一维索引
-    bit_index = i * 3
-    byte_index = bit_index // 8
-    bit_offset = bit_index % 8
+def get_houses_by_map_id(map_id: int) -> List[Dict[str, Any]]:
+    """
+    获取指定地图上的所有房子信息。
+    Args:
+        map_id: 地图 ID。
+    Returns:
+        List[Dict]: 包含房子信息的字典列表。
+    """
+    try:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT id, map_id, x, y, capacity FROM houses WHERE map_id = ? ORDER BY created_at", (map_id,))
+            rows = cursor.fetchall()
+            houses = [dict(row) for row in rows]
+            logger.debug(f"Database: Retrieved {len(houses)} houses for map {map_id}")
+            return houses
+    except Exception as e:
+        error_msg = f"Error retrieving houses for map {map_id}: {e}"
+        logger.error(error_msg)
+        return []
 
-    if byte_index >= len(packed_data):
-        raise IndexError(f"计算出的字节索引 {byte_index} 超出数据范围 {len(packed_data)}，地图ID {map_id}。")
+# --- Villagers 表操作函数 ---
+def insert_villager(house_id: int, name: Optional[str] = None) -> Optional[int]:
+    """
+    为指定房子添加一个居民。
+    Args:
+        house_id: 所属房子ID。
+        name: 居民名字 (可选)。
+    Returns:
+        Optional[int]: 新插入居民的 ID。
+    Raises:
+        DatabaseError: 如果数据库插入失败（如外键约束违反）。
+    """
+    try:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
+            with conn:
+                cursor = conn.execute(
+                    "INSERT INTO villagers (house_id, name) VALUES (?, ?)",
+                    (house_id, name)
+                )
+                villager_id = cursor.lastrowid
+                if villager_id is not None:
+                    logger.info(f"Database: Inserted new villager (ID: {villager_id}) into house {house_id}" + (f" named {name}" if name else " (unnamed)"))
+                    return villager_id
+                raise DatabaseError(f"Failed to retrieve lastrowid for villager in house {house_id}.")
+    except sqlite3.IntegrityError as e:
+        error_msg = f"Database constraint failed when inserting villager into house {house_id}: {e}"
+        logger.error(error_msg)
+        raise DatabaseError(error_msg) from e
+    except Exception as e:
+        error_msg = f"Unexpected error inserting villager into house {house_id}: {e}"
+        logger.error(error_msg)
+        raise DatabaseError(error_msg) from e
 
-    # 清除旧的 3 位值
-    if bit_offset <= 5: # 完全在一个字节内或在边界上
-        mask = (1 << 3) - 1 # 0b111
-        shift = 8 - 3 - bit_offset
-        packed_data[byte_index] &= ~(mask << shift) # 清零对应位
-        packed_data[byte_index] |= (new_tile_value << shift) & 0xFF # 设置新值
-    else: # 跨越两个字节
-        bits_in_first_byte = 8 - bit_offset
-        bits_in_second_byte = 3 - bits_in_first_byte
-        mask1 = (1 << bits_in_first_byte) - 1
-        mask2 = (1 << bits_in_second_byte) - 1
-        packed_data[byte_index] &= ~(mask1) # 清零第一个字节的低位
-        packed_data[byte_index] |= (new_tile_value >> bits_in_second_byte) & mask1
-        # 检查是否有第二个字节
-        if byte_index + 1 < len(packed_data):
-            packed_data[byte_index + 1] &= ~(mask2 << (8 - bits_in_second_byte)) # 清零第二个字节的高位
-            packed_data[byte_index + 1] |= (new_tile_value << (8 - bits_in_second_byte)) & 0xFF
-        else:
-             logger.debug(f"update_tile_packed: 瓦片 ({x},{y}) 的值跨越字节边界，但下一个字节不存在，地图ID {map_id}。")
+def get_villagers_by_house_id(house_id: int) -> List[Dict[str, Any]]:
+    """
+    获取指定房子内的所有居民。
+    Args:
+        house_id: 房子 ID。
+    Returns:
+        List[Dict]: 包含居民信息的字典列表。
+    """
+    try:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT id, house_id, name, status FROM villagers WHERE house_id = ?", (house_id,))
+            rows = cursor.fetchall()
+            villagers = [dict(row) for row in rows]
+            logger.debug(f"Database: Retrieved {len(villagers)} villagers for house {house_id}")
+            return villagers
+    except Exception as e:
+        error_msg = f"Error retrieving villagers for house {house_id}: {e}"
+        logger.error(error_msg)
+        return []
 
-    # 将修改后的 bytearray 转换回 bytes 并返回
-    return bytes(packed_data)
+# 注意：get_villagers_by_map_id 可能也需要，如果想获取地图上所有居民
+# def get_villagers_by_map_id(map_id: int) -> List[Dict[str, Any]]:
+#     """获取指定地图上的所有居民（通过关联的房子）"""
+#     try:
+#         with closing(sqlite3.connect(DB_PATH)) as conn:
+#             conn.row_factory = sqlite3.Row
+#             # 使用 JOIN 查询关联 houses 表
+#             cursor = conn.execute("""
+#                 SELECT v.id, v.house_id, v.name, v.status
+#                 FROM villagers v
+#                 JOIN houses h ON v.house_id = h.id
+#                 WHERE h.map_id = ?
+#             """, (map_id,))
+#             rows = cursor.fetchall()
+#             villagers = [dict(row) for row in rows]
+#             logger.debug(f"Database: Retrieved {len(villagers)} villagers for map {map_id}")
+#             return villagers
+#     except Exception as e:
+#         error_msg = f"Error retrieving villagers for map {map_id}: {e}"
+#         logger.error(error_msg)
+#         return []
