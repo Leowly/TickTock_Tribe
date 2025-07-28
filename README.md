@@ -1,3 +1,5 @@
+[English](./docs/README.en.md)
+
 # TickTock Tribe
 
 一个基于时间刻（Tick）驱动的大型网格世界模拟后端，专注于高效的地图生成、存储和更新。
@@ -19,9 +21,9 @@
 
 ### 环境要求
 
-*   **Python 3.8 或更高版本**
-*   **uv** (推荐的 Python 包和项目管理器)
-*   **G++** (用于编译 C++ 地图生成库)
+- **Python 3.8 或更高版本**
+- **uv** (推荐的 Python 包和项目管理器)
+- **G++** (用于编译 C++ 地图生成库)
 
 ### 安装与运行
 
@@ -34,30 +36,30 @@
 
 ## ⚙️ 技术栈
 
-*   **后端**: Python (Flask)
-*   **前端**: HTML5, JavaScript (原生 + Canvas), Tailwind CSS (通过 CDN)
-*   **数据库**: SQLite
-*   **性能关键部分**: C++ (编译为共享库，由 Python 通过 ctypes 调用)
-*   **配置**: TOML
-*   **依赖管理**: `uv`
+- **后端**: Python (Flask)
+- **前端**: HTML5, JavaScript (原生 + Canvas), Tailwind CSS (通过 CDN)
+- **数据库**: SQLite
+- **性能关键部分**: C++ (编译为共享库，由 Python 通过 ctypes 调用)
+- **配置**: TOML
+- **依赖管理**: `uv`
 
 ## 📁 项目结构
 
-*   `app.py`: Flask 应用主入口。
-*   `config.toml`: 项目配置文件（地图尺寸、地形参数等）。
-*   `core/`: 核心 Python 模块（配置、数据库、Tick 管理器、世界更新器）。
-*   `generator/`: C++ 地图生成器 (`generator.cpp`) 及其 Python 封装 (`c_world_generator.py`)。
-*   `templates/`: Flask HTML 模板。
-*   `static/`: 静态资源（JavaScript, CSS）。
-*   `database/`: SQLite 数据库存放目录。
-*   `Game_Mechanics/`: 包含详细游戏机制设计的文档。
+- `app.py`: Flask 应用主入口。
+- `config.toml`: 项目配置文件（地图尺寸、地形参数等）。
+- `core/`: 核心 Python 模块（配置、数据库、Tick 管理器、世界更新器）。
+- `generator/`: C++ 地图生成器 (`generator.cpp`) 及其 Python 封装 (`c_world_generator.py`)。
+- `templates/`: Flask HTML 模板。
+- `static/`: 静态资源（JavaScript, CSS）。
+- `database/`: SQLite 数据库存放目录。
+- `docs/`: 包含项目文档（READMEs, 游戏机制设计等）。 <!-- 已经更新 -->
 
-## 📜 游戏机制 (Game Mechanics)
+## 🎮 游戏机制 (Game Mechanics) <!-- 图标已更换 -->
 
 关于游戏核心玩法、系统设计和数值的详细说明，请参阅以下文档：
 
-*   **[游戏机制设计 (中文版)](./Game_Mechanics/游戏机制设计.md)**
-*   **[Game Mechanics Design (English)](./Game_Mechanics/Game_Mechanics.md)**
+- **[游戏机制设计 (中文版)](./docs/Game_Mechanics.zh.md)** <!-- 链接已更新 -->
+- **[Game Mechanics Design (English)](./docs/Game_Mechanics.md)** <!-- 链接已更新 -->
 
 ## 📜 许可证
 
