@@ -1,12 +1,16 @@
 # app.py
 from flask import Flask, request, jsonify, render_template
+import logging
 from core.config import Config
 from generator.c_world_generator import CWorldGenerator
 from core import database
 from core import world_updater # 只导入模块
 from core.ticker import Ticker      # 只导入类
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 import base64
-import random
 
 app = Flask(__name__)
 
@@ -73,9 +77,12 @@ def get_maps():
 
 @app.route("/api/generate_map", methods=["POST"])
 def generate_map():
-    """生成新地图，并根据游戏机制创建初始村民"""
+    """
+    生成新地图，并根据游戏机制创建初始村民。
+    """
     data = request.json or {}
     try:
+        # --- 1. 解析请求参数 ---
         name = data["name"]
         world_params = data["world"]
         forest_params = data["forest"]
@@ -84,6 +91,7 @@ def generate_map():
         width = int(world_params["width"])
         height = int(world_params["height"])
         
+        # --- 2. 调用 C++ 生成器创建地形 ---
         packed_map_bytes = generator.generate_tiles(
             width=width, height=height,
             seed_prob=forest_params["seed_prob"],
@@ -95,31 +103,62 @@ def generate_map():
             water_height_influence=water_params["height_influence"],
         )
         
+        # --- 3. 将新地图存入数据库 ---
         map_id = database.insert_map(name, width, height, packed_map_bytes)
         if not map_id:
             return jsonify({"error": "Failed to save new map to database"}), 500
 
+        # --- 4. 创建初始村民 ---
         villager_config = config.get_villager()
-        initial_villager_count = villager_config.get('initial_villagers', 2)
+        time_config = config.get_time()
+
+        initial_age_years = villager_config.get('initial_age_years', 20)
+        ticks_per_year = time_config.get('ticks_per_year', 365)
+        initial_age_in_ticks = initial_age_years * ticks_per_year
+        
         initial_food = villager_config.get('initial_food', 50)
         
-        for i in range(initial_villager_count):
-            house_id = database.create_virtual_house(map_id, initial_storage={"food": initial_food})
-            if house_id:
-                gender = random.choice(['male', 'female'])
-                villager_name = f"Pioneer-{i+1}"
-                database.insert_villager(map_id, house_id, villager_name, gender)
+        # 在世界中心生成村民
+        center_x, center_y = width // 2, height // 2
+
+        # 创建一男一女
+        initial_villagers = [
+            {'name': 'Adam', 'gender': 'male'},
+            {'name': 'Eve', 'gender': 'female'}
+        ]
         
+        for villager_data in initial_villagers:
+            # a. 为每个村民创建虚拟房屋(个人背包)和初始食物
+            house_id = database.create_virtual_house(map_id, initial_storage={"food": initial_food})
+            if not house_id:
+                # 如果创建虚拟房屋失败，这是一个严重问题，可以记录并跳过
+                logger.error(f"Failed to create virtual house for initial villager on map {map_id}")
+                continue
+            
+            # b. 将村民插入数据库，包含所有初始属性
+            # 注意：这需要 database.insert_villager 支持这些参数
+            database.insert_villager(
+                map_id=map_id,
+                house_id=house_id,
+                name=villager_data['name'],
+                gender=villager_data['gender'],
+                x=center_x,
+                y=center_y,
+                age_in_ticks=initial_age_in_ticks # 传递初始年龄
+            )
+        
+        # --- 5. 返回成功响应 ---
         return jsonify({
             "success": True,
             "map_id": map_id,
             "name": name,
-            "message": f"Map created with {initial_villager_count} initial villagers."
-        }), 201
+            "message": f"Map created with {len(initial_villagers)} initial villagers at the center."
+        }), 201 # 201 Created
         
     except KeyError as e:
-        return jsonify({"error": f"Missing required parameter: {str(e)}"}), 400
+        return jsonify({"error": f"Missing required parameter in request: {str(e)}"}), 400
     except Exception as e:
+        logger.error(f"Map generation failed unexpectedly: {e}", exc_info=True)
         return jsonify({"error": f"Map generation failed: {str(e)}"}), 500
 
 

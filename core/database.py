@@ -111,8 +111,7 @@ def init_db():
             FOREIGN KEY (map_id) REFERENCES world_maps (id) ON DELETE CASCADE
         )
         ''')
-
-        # --- Villagers 表 ---
+        # --- Villagers 表---
         conn.execute('''
         CREATE TABLE IF NOT EXISTS villagers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,9 +121,15 @@ def init_db():
             gender TEXT NOT NULL CHECK(gender IN ('male', 'female')),
             age_in_ticks INTEGER NOT NULL DEFAULT 0,
             hunger INTEGER NOT NULL DEFAULT 100,
+            
+            -- 新增：村民在世界中的逻辑坐标
+            x INTEGER NOT NULL,
+            y INTEGER NOT NULL,
+            
             status TEXT DEFAULT 'idle',
-            current_task TEXT,
+            current_task TEXT, -- 例如: 'build_farmland:10,20'
             task_progress INTEGER,
+            
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (map_id) REFERENCES world_maps (id) ON DELETE CASCADE,
             FOREIGN KEY (house_id) REFERENCES houses (id) ON DELETE RESTRICT 
@@ -240,11 +245,11 @@ def commit_changes(map_id: int, changeset: Dict[str, List[Any]]):
                 villager_updates = changeset.get("villager_updates")
                 if villager_updates:
                     update_tuples = [
-                        (v['age_in_ticks'], v['hunger'], v['status'], v.get('current_task'), v.get('task_progress'), v['house_id'], v['id']) 
+                        (v['age_in_ticks'], v['hunger'], v['x'], v['y'], v['status'], v.get('current_task'), v.get('task_progress'), v['house_id'], v['id']) 
                         for v in villager_updates
                     ]
                     conn.executemany(
-                        "UPDATE villagers SET age_in_ticks=?, hunger=?, status=?, current_task=?, task_progress=?, house_id=? WHERE id=?",
+                        "UPDATE villagers SET age_in_ticks=?, hunger=?, x=?, y=?, status=?, current_task=?, task_progress=?, house_id=? WHERE id=?",
                         update_tuples
                     )
 
@@ -334,14 +339,17 @@ def create_virtual_house(map_id: int, initial_storage: Optional[Dict[str, Any]] 
         logger.error(f"Failed to create virtual house for map {map_id}: {e}")
         return None
 
-def insert_villager(map_id: int, house_id: int, name: str, gender: str) -> Optional[int]:
-    """插入一个拥有基本信息的新村民。"""
+def insert_villager(map_id: int, house_id: int, name: str, gender: str, x: int, y: int, age_in_ticks: int = 0) -> Optional[int]:
+    """插入一个拥有基本信息、坐标和年龄的新村民。"""
     try:
         with closing(_get_connection()) as conn:
             with conn:
                 cursor = conn.execute(
-                    "INSERT INTO villagers (map_id, house_id, name, gender) VALUES (?, ?, ?, ?)",
-                    (map_id, house_id, name, gender)
+                    """
+                    INSERT INTO villagers (map_id, house_id, name, gender, x, y, age_in_ticks)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (map_id, house_id, name, gender, x, y, age_in_ticks)
                 )
                 return cursor.lastrowid
     except Exception as e:

@@ -1,13 +1,14 @@
 # core/world_updater.py
 import logging
-from typing import List, Tuple, Dict, Any
 from core import database, config
+from core import villager_ai  # <-- 1. 导入新的AI模块
 
 logger = logging.getLogger(__name__)
 
 # 定义地形常量等
 PLAIN = 0
 FOREST = 1
+WATER = 2
 FARM_UNTILLED = 3
 
 class WorldUpdater:
@@ -21,10 +22,17 @@ class WorldUpdater:
         """
         self.config = config_obj
         
-        # 预加载配置参数，避免在循环中重复调用 get 方法
+        # 预加载村民配置
         villager_cfg = self.config.get_villager()
         self.hunger_loss_per_tick = villager_cfg.get('hunger_loss_per_tick', 1)
-        self.ticks_to_starve = villager_cfg.get('ticks_to_starve', 100)
+        
+        # 2. 预加载任务耗时配置
+        tasks_cfg = self.config.get('tasks', {}) # 假设config.py有get('tasks')
+        self.task_durations = {
+            'build_farmland': tasks_cfg.get('build_farmland_ticks', 10), # 示例：建农田要10 ticks
+            'chop_tree': tasks_cfg.get('chop_tree_ticks', 20),
+            'build_house': tasks_cfg.get('build_house_ticks', 50),
+        }
         
     def update(self, map_id: int, current_tick: int) -> bool:
         """
@@ -46,60 +54,84 @@ class WorldUpdater:
             logger.error(f"Cannot update: Failed to get world snapshot for map {map_id}.")
             return False
         
-        # 2. 准备一个空的变更集来收集本轮的所有变化
+        # 2. 准备一个空的变更集
         changeset = {
-            "tile_changes": [],
-            "villager_updates": [],
-            "house_updates": [],
-            "new_villagers": [],
-            "new_houses": [],
-            "deleted_villager_ids": [],
+            "tile_changes": [], "villager_updates": [], "house_updates": [],
+            "new_villagers": [], "new_houses": [], "deleted_villager_ids": [],
             "deleted_house_ids": []
         }
         
-        # 3. 在内存中执行所有模拟和AI决策
+        # 3. 核心AI与模拟循环
         logger.debug(f"Simulating tick {current_tick} for map {map_id}...")
         
-        # --- 核心逻辑更新：应用新的时间和消耗规则 ---
-        villagers_to_process = list(snapshot.villagers) # 创建副本以安全地处理死亡
+        villagers_to_process = list(snapshot.villagers)
         
         for villager in villagers_to_process:
-            # a. 年龄增长
-            villager['age_in_ticks'] += 1
+            # --- 3a. AI决策与任务处理 ---
             
-            # b. 饥饿度下降 (使用配置中的值)
+            # 如果村民是空闲的，为他决定新任务
+            if villager['status'] == 'idle':
+                # 调用AI模块进行决策
+                action = villager_ai.decide_next_action(villager, snapshot, self.config.data)
+                
+                if action and action.get('type') == 'TASK':
+                    task_name = action['name']
+                    target_x, target_y = action['target']
+                    
+                    # 分配新任务
+                    villager['status'] = 'working'
+                    villager['current_task'] = f"{task_name}:{target_x},{target_y}"
+                    villager['task_progress'] = 0
+                    logger.info(f"Villager {villager['id']} starts task '{task_name}' at ({target_x},{target_y}).")
+
+            # 如果村民在工作，推进任务进度
+            elif villager['status'] == 'working':
+                villager['task_progress'] += 1
+                
+                task_parts = villager['current_task'].split(':')
+                task_name = task_parts[0]
+                
+                # 检查任务是否完成
+                if villager['task_progress'] >= self.task_durations.get(task_name, 1):
+                    logger.info(f"Villager {villager['id']} completes task '{task_name}'.")
+                    
+                    # 应用任务结果
+                    if task_name == 'build_farmland':
+                        target_coords = task_parts[1].split(',')
+                        x, y = int(target_coords[0]), int(target_coords[1])
+                        
+                        # 检查地块是否仍然是平原，防止冲突
+                        if snapshot.grid_2d[y][x] == PLAIN:
+                            snapshot.grid_2d[y][x] = FARM_UNTILLED # 在内存中更新
+                            changeset['tile_changes'].append((x, y, FARM_UNTILLED))
+                            database.log_event(map_id, current_tick, 'TERRAIN_CHANGE', {'x': x, 'y': y, 'new_type': FARM_UNTILLED})
+                    
+                    # 重置村民状态，让他可以接受新任务
+                    villager['status'] = 'idle'
+                    villager['current_task'] = None
+                    villager['task_progress'] = None
+
+            # --- 3b. 被动状态更新 ---
+            villager['age_in_ticks'] += 1
             if villager['hunger'] > 0:
                 villager['hunger'] -= self.hunger_loss_per_tick
             
-            # c. 死亡判定
             if villager['hunger'] <= 0:
                 logger.info(f"Villager {villager['id']} has died of starvation.")
-                # 记录要删除的村民ID
                 changeset["deleted_villager_ids"].append(villager['id'])
-                # (未来可能还需要处理房屋空位等逻辑)
-                # 从当前tick的处理中跳过此村民
                 continue
 
-            # 如果村民还活着，则将他的状态变更加入更新列表
+            # 将此村民的所有状态变更（包括AI驱动的和被动的）加入更新集
             changeset["villager_updates"].append(villager)
-            
-        # --- 示例逻辑：一个村民在(10,10)开垦农田 (保持不变) ---
-        if snapshot.villagers:
-            x, y = 10, 10
-            if snapshot.grid_2d[y][x] == PLAIN:
-                new_tile_type = FARM_UNTILLED
-                snapshot.grid_2d[y][x] = new_tile_type
-                changeset["tile_changes"].append((x, y, new_tile_type))
-                database.log_event(map_id, current_tick, 'TERRAIN_CHANGE', 
-                                   {'x': x, 'y': y, 'new_type': new_tile_type})
 
         # 4. 原子性地提交所有变更
-        logger.debug(f"Committing changes for tick {current_tick}...")
-        try:
-            # 注意：commit_changes 需要被扩展以处理删除操作
-            database.commit_changes(map_id, changeset)
-        except Exception as e:
-            logger.error(f"Failed to commit changeset for map {map_id}: {e}")
-            return False
+        # 检查是否有任何变更发生，避免不必要的数据库写入
+        if any(changeset.values()):
+            logger.debug(f"Committing changes for tick {current_tick}...")
+            try:
+                database.commit_changes(map_id, changeset)
+            except Exception as e:
+                logger.error(f"Failed to commit changeset for map {map_id}: {e}")
+                return False
 
         return True
