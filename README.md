@@ -52,14 +52,14 @@
 - `templates/`: Flask HTML 模板。
 - `static/`: 静态资源（JavaScript, CSS）。
 - `database/`: SQLite 数据库存放目录。
-- `docs/`: 包含项目文档（READMEs, 游戏机制设计等）。 <!-- 已经更新 -->
+- `docs/`: 包含项目文档（READMEs, 游戏机制设计等）。
 
-## 🎮 游戏机制 (Game Mechanics) <!-- 图标已更换 -->
+## 🎮 游戏机制 (Game Mechanics)
 
 关于游戏核心玩法、系统设计和数值的详细说明，请参阅以下文档：
 
 - **[游戏机制设计 (中文版)](./docs/游戏机制设计.md)**
-- **[Game Mechanics Design (English)](./docs/Game_Mechanics.md)** 
+- **[Game Mechanics Design (English)](./docs/Game_Mechanics.md)**
 
 ## 📜 许可证
 

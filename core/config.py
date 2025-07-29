@@ -1,5 +1,6 @@
 import os
 import toml
+from typing import Dict, Any
 
 class Config:
     def __init__(self, config_path=None):
@@ -24,3 +25,11 @@ class Config:
 
     def get_view(self):
         return self.data.get('view', {})
+    
+    def get_villager(self) -> Dict[str, Any]:
+        """获取村民相关的配置"""
+        return self.data.get('villager', {})
+
+    def get_time(self) -> Dict[str, Any]:
+        """获取时间相关的配置"""
+        return self.data.get('time', {})
