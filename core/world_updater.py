@@ -1,8 +1,6 @@
 # core/world_updater.py
 import logging
 from core import database, config
-from core import villager_ai  # <-- 1. 导入新的AI模块
-
 logger = logging.getLogger(__name__)
 
 # 定义地形常量等
@@ -10,6 +8,8 @@ PLAIN = 0
 FOREST = 1
 WATER = 2
 FARM_UNTILLED = 3
+
+from core import villager_ai
 
 class WorldUpdater:
     """
