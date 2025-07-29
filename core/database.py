@@ -85,8 +85,67 @@ def init_db():
     """初始化数据库。此函数创建所有表结构。"""
     # ... (init_db 函数的 SQL 代码保持不变) ...
     with _get_connection() as conn:
-        # SQL for creating world_maps, houses, villagers, events tables
-        pass # For brevity, assuming the SQL is the same as before
+        # --- World Maps 表 ---
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS world_maps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            map_data BLOB NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # --- Houses 表 ---
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS houses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            map_id INTEGER NOT NULL,
+            x INTEGER,
+            y INTEGER,
+            capacity INTEGER NOT NULL DEFAULT 1,
+            integrity INTEGER,
+            storage TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (map_id) REFERENCES world_maps (id) ON DELETE CASCADE
+        )
+        ''')
+
+        # --- Villagers 表 ---
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS villagers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            map_id INTEGER NOT NULL,
+            house_id INTEGER NOT NULL,
+            name TEXT,
+            gender TEXT NOT NULL CHECK(gender IN ('male', 'female')),
+            age_in_ticks INTEGER NOT NULL DEFAULT 0,
+            hunger INTEGER NOT NULL DEFAULT 100,
+            status TEXT DEFAULT 'idle',
+            current_task TEXT,
+            task_progress INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (map_id) REFERENCES world_maps (id) ON DELETE CASCADE,
+            FOREIGN KEY (house_id) REFERENCES houses (id) ON DELETE RESTRICT 
+        )
+        ''')
+
+        # --- Events 表 ---
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            map_id INTEGER NOT NULL,
+            tick INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_events_map_tick ON events (map_id, tick);')
+        
+        conn.commit()
+        logger.info("Database initialized and all tables are ensured to exist.")
 
 def get_world_snapshot(map_id: int) -> Optional[WorldSnapshot]:
     """
