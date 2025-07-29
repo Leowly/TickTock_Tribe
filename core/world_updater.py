@@ -17,16 +17,18 @@ class WorldUpdater:
     """
     def __init__(self, config_obj: config.Config):
         """
-        初始化 WorldUpdater。
-        Args:
-            config_obj: 包含游戏规则和参数的配置对象。
+        初始化 WorldUpdater，并预加载配置参数以提高性能。
         """
         self.config = config_obj
+        
+        # 预加载配置参数，避免在循环中重复调用 get 方法
+        villager_cfg = self.config.get_villager()
+        self.hunger_loss_per_tick = villager_cfg.get('hunger_loss_per_tick', 1)
+        self.ticks_to_starve = villager_cfg.get('ticks_to_starve', 100)
         
     def update(self, map_id: int, current_tick: int) -> bool:
         """
         主更新入口点，由 Ticker 调用。
-        负责调用游戏逻辑并处理异常。
         """
         try:
             return self._update_game_logic(map_id, current_tick)
@@ -58,34 +60,46 @@ class WorldUpdater:
         # 3. 在内存中执行所有模拟和AI决策
         logger.debug(f"Simulating tick {current_tick} for map {map_id}...")
         
-        # --- 示例逻辑：所有饥饿的村民都会变老 ---
-        for villager in snapshot.villagers:
+        # --- 核心逻辑更新：应用新的时间和消耗规则 ---
+        villagers_to_process = list(snapshot.villagers) # 创建副本以安全地处理死亡
+        
+        for villager in villagers_to_process:
+            # a. 年龄增长
             villager['age_in_ticks'] += 1
+            
+            # b. 饥饿度下降 (使用配置中的值)
             if villager['hunger'] > 0:
-                villager['hunger'] -= 1
-            # 将这个村民的变更加入列表
+                villager['hunger'] -= self.hunger_loss_per_tick
+            
+            # c. 死亡判定
+            if villager['hunger'] <= 0:
+                logger.info(f"Villager {villager['id']} has died of starvation.")
+                # 记录要删除的村民ID
+                changeset["deleted_villager_ids"].append(villager['id'])
+                # (未来可能还需要处理房屋空位等逻辑)
+                # 从当前tick的处理中跳过此村民
+                continue
+
+            # 如果村民还活着，则将他的状态变更加入更新列表
             changeset["villager_updates"].append(villager)
             
-        # --- 示例逻辑：一个村民在(10,10)开垦农田 ---
+        # --- 示例逻辑：一个村民在(10,10)开垦农田 (保持不变) ---
         if snapshot.villagers:
             x, y = 10, 10
-            # AI可以访问内存中的完整grid_2d来决策
             if snapshot.grid_2d[y][x] == PLAIN:
                 new_tile_type = FARM_UNTILLED
-                # 在内存中更新，供本轮后续逻辑使用
                 snapshot.grid_2d[y][x] = new_tile_type
-                # 记录变更
                 changeset["tile_changes"].append((x, y, new_tile_type))
-                # 记录事件
                 database.log_event(map_id, current_tick, 'TERRAIN_CHANGE', 
                                    {'x': x, 'y': y, 'new_type': new_tile_type})
 
         # 4. 原子性地提交所有变更
         logger.debug(f"Committing changes for tick {current_tick}...")
         try:
+            # 注意：commit_changes 需要被扩展以处理删除操作
             database.commit_changes(map_id, changeset)
         except Exception as e:
             logger.error(f"Failed to commit changeset for map {map_id}: {e}")
-            return False # 提交失败，则此Tick失败
+            return False
 
         return True

@@ -18,9 +18,10 @@ height_influence = 5.0
 
 
 [villager]
-initial_villagers = 2
-initial_food = 50
+hunger_loss_per_tick = 1 # 每tick（每天）消耗1点饥饿度
+ticks_to_starve = 10    # 100点饥饿度，每tick掉1点，所以10 ticks后饿死
+reproduction_cooldown_ticks = 360 # 现在是360 ticks (360天)
 
 [time]
-ticks_per_day = 100
-ticks_per_year = 36500
+ticks_per_day = 1       # <--- 核心改动：现在1个Tick就是1天
+ticks_per_year = 365    # <--- 相应调整：一年现在是365个Ticks

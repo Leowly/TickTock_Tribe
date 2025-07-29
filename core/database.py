@@ -196,8 +196,36 @@ def commit_changes(map_id: int, changeset: Dict[str, List[Any]]):
     """
     try:
         with closing(_get_connection()) as conn:
-            with conn: # 自动开始事务
-                # --- 1. 处理地形变更 ---
+            # with conn 自动开始一个事务。如果任何步骤失败，所有更改都将回滚。
+            with conn:
+                # --- 1. 处理创建 (Creation) ---
+                # 先创建新的实体，这样它们就可以在同一个tick中被更新
+                
+                new_houses = changeset.get("new_houses")
+                if new_houses:
+                    house_tuples = [
+                        (map_id, h.get('x'), h.get('y'), h.get('capacity', 1), h.get('integrity'), json.dumps(h.get('storage', {})))
+                        for h in new_houses
+                    ]
+                    conn.executemany(
+                        "INSERT INTO houses (map_id, x, y, capacity, integrity, storage) VALUES (?, ?, ?, ?, ?, ?)",
+                        house_tuples
+                    )
+
+                new_villagers = changeset.get("new_villagers")
+                if new_villagers:
+                    villager_tuples = [
+                        (map_id, v['house_id'], v['name'], v['gender'], v.get('age_in_ticks', 0), v.get('hunger', 100))
+                        for v in new_villagers
+                    ]
+                    conn.executemany(
+                        "INSERT INTO villagers (map_id, house_id, name, gender, age_in_ticks, hunger) VALUES (?, ?, ?, ?, ?, ?)",
+                        villager_tuples
+                    )
+
+                # --- 2. 处理更新 (Updates) ---
+                
+                # 地形变更
                 tile_changes = changeset.get("tile_changes")
                 if tile_changes:
                     map_row = conn.execute("SELECT width, map_data FROM world_maps WHERE id=?", (map_id,)).fetchone()
@@ -208,23 +236,48 @@ def commit_changes(map_id: int, changeset: Dict[str, List[Any]]):
                             _write_tile_to_blob(map_bytearray, x, y, new_type, width)
                         conn.execute("UPDATE world_maps SET map_data=? WHERE id=?", (bytes(map_bytearray), map_id))
 
-                # --- 2. 处理实体更新 ---
+                # 村民状态更新
                 villager_updates = changeset.get("villager_updates")
                 if villager_updates:
-                    # (完整的字段列表)
-                    update_tuples = [(v['age_in_ticks'], v['hunger'], v['status'], v['current_task'], v['task_progress'], v['house_id'], v['id']) for v in villager_updates]
-                    conn.executemany("UPDATE villagers SET age_in_ticks=?, hunger=?, status=?, current_task=?, task_progress=?, house_id=? WHERE id=?", update_tuples)
+                    update_tuples = [
+                        (v['age_in_ticks'], v['hunger'], v['status'], v.get('current_task'), v.get('task_progress'), v['house_id'], v['id']) 
+                        for v in villager_updates
+                    ]
+                    conn.executemany(
+                        "UPDATE villagers SET age_in_ticks=?, hunger=?, status=?, current_task=?, task_progress=?, house_id=? WHERE id=?",
+                        update_tuples
+                    )
 
+                # 房屋状态更新
                 house_updates = changeset.get("house_updates")
                 if house_updates:
-                    update_tuples = [(json.dumps(h['storage']), h['integrity'], h['id']) for h in house_updates]
-                    conn.executemany("UPDATE houses SET storage=?, integrity=? WHERE id=?", update_tuples)
+                    update_tuples = [
+                        (json.dumps(h.get('storage', {})), h.get('integrity'), h.get('capacity'), h['id']) 
+                        for h in house_updates
+                    ]
+                    conn.executemany(
+                        "UPDATE houses SET storage=?, integrity=?, capacity=? WHERE id=?",
+                        update_tuples
+                    )
+                
+                # --- 3. 处理删除 (Deletion) ---
+                # 最后执行删除，以避免外键约束问题
+                
+                deleted_house_ids = changeset.get("deleted_house_ids")
+                if deleted_house_ids:
+                    # 注意：由于村民表有外键约束，删除房屋前必须先确保房屋是空的
+                    conn.executemany("DELETE FROM houses WHERE id=?", [(hid,) for hid in deleted_house_ids])
 
-                # --- 3. 处理实体创建/删除 (未来实现) ---
-                # ... logic for new_villagers, deleted_villager_ids, etc. ...
-    
+                deleted_villager_ids = changeset.get("deleted_villager_ids")
+                if deleted_villager_ids:
+                    conn.executemany("DELETE FROM villagers WHERE id=?", [(vid,) for vid in deleted_villager_ids])
+
+    except sqlite3.IntegrityError as e:
+        logger.error(f"Database Integrity Error during commit for map {map_id}: {e}. Changes will be rolled back.")
+        raise # 重新抛出，让上层知道事务失败
+
     except Exception as e:
-        logger.error(f"Failed to commit changes for map {map_id}: {e}", exc_info=True)
+        logger.error(f"Failed to commit changeset for map {map_id}: {e}", exc_info=True)
         raise # 重新抛出异常，让上层知道事务失败
 
 def insert_map(name: str, width: int, height: int, map_bytes: bytes) -> Optional[int]:
