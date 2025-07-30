@@ -30,6 +30,7 @@ initial_seeds = 0  # 初始种子数量
 hunger_loss_per_tick = 25  # 每tick消耗的饥饿度
 max_hunger = 100          # 最大饥饿度
 ticks_to_starve = 5      # 饥饿度为0后多少tick死亡
+hunger_per_food = 25      #  【新增】每单位食物恢复的饥饿度
 
 # 年龄系统
 ticks_per_year = 365      # 一年多少tick
