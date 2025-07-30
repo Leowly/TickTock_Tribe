@@ -83,7 +83,6 @@ def _write_tile_to_blob(packed_data: bytearray, x: int, y: int, value: int, widt
 # --- 公共API ---
 def init_db():
     """初始化数据库。此函数创建所有表结构。"""
-    # ... (init_db 函数的 SQL 代码保持不变) ...
     with _get_connection() as conn:
         # --- World Maps 表 ---
         conn.execute('''
@@ -104,35 +103,42 @@ def init_db():
             map_id INTEGER NOT NULL,
             x INTEGER,
             y INTEGER,
-            capacity INTEGER NOT NULL DEFAULT 1,
-            integrity INTEGER,
-            storage TEXT,
+            capacity INTEGER NOT NULL DEFAULT 4,
+            current_occupants TEXT, -- JSON array of villager IDs
+            food_storage INTEGER DEFAULT 0,
+            wood_storage INTEGER DEFAULT 0,
+            seeds_storage INTEGER DEFAULT 0,
+            build_tick INTEGER DEFAULT 0,
+            is_standing BOOLEAN DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (map_id) REFERENCES world_maps (id) ON DELETE CASCADE
         )
         ''')
+        
         # --- Villagers 表---
         conn.execute('''
         CREATE TABLE IF NOT EXISTS villagers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             map_id INTEGER NOT NULL,
-            house_id INTEGER NOT NULL,
-            name TEXT,
+            name TEXT NOT NULL,
             gender TEXT NOT NULL CHECK(gender IN ('male', 'female')),
-            age_in_ticks INTEGER NOT NULL DEFAULT 0,
-            hunger INTEGER NOT NULL DEFAULT 100,
-            
-            -- 新增：村民在世界中的逻辑坐标
+            age INTEGER NOT NULL DEFAULT 20, -- 年龄（岁）
+            age_in_ticks INTEGER NOT NULL DEFAULT 0, -- 年龄（tick）
             x INTEGER NOT NULL,
             y INTEGER NOT NULL,
-            
+            house_id INTEGER, -- 可以为NULL，表示无家可归
+            hunger INTEGER NOT NULL DEFAULT 100,
+            food INTEGER DEFAULT 0,
+            wood INTEGER DEFAULT 0,
+            seeds INTEGER DEFAULT 0,
             status TEXT DEFAULT 'idle',
             current_task TEXT, -- 例如: 'build_farmland:10,20'
-            task_progress INTEGER,
-            
+            task_progress INTEGER DEFAULT 0,
+            last_reproduction_tick INTEGER DEFAULT 0,
+            is_alive BOOLEAN DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (map_id) REFERENCES world_maps (id) ON DELETE CASCADE,
-            FOREIGN KEY (house_id) REFERENCES houses (id) ON DELETE RESTRICT 
+            FOREIGN KEY (house_id) REFERENCES houses (id) ON DELETE SET NULL
         )
         ''')
 
@@ -167,15 +173,16 @@ def get_world_snapshot(map_id: int) -> Optional[WorldSnapshot]:
             width, height, map_blob = map_row
 
             # 2. 获取实体
-            villagers = [dict(row) for row in conn.execute("SELECT * FROM villagers WHERE map_id=?", (map_id,)).fetchall()]
-            houses_rows = conn.execute("SELECT * FROM houses WHERE map_id=?", (map_id,)).fetchall()
+            villagers = [dict(row) for row in conn.execute("SELECT * FROM villagers WHERE map_id=? AND is_alive=1", (map_id,)).fetchall()]
+            houses_rows = conn.execute("SELECT * FROM houses WHERE map_id=? AND is_standing=1", (map_id,)).fetchall()
             
             # 3. 处理数据格式
             grid_2d = _unpack_3bit_bytes(map_blob, width, height)
             houses = []
             for row in houses_rows:
                 house = dict(row)
-                house['storage'] = json.loads(house.get('storage') or '{}')
+                # 解析JSON字段
+                house['current_occupants'] = json.loads(house.get('current_occupants') or '[]')
                 houses.append(house)
 
             return WorldSnapshot(map_id, width, height, grid_2d, villagers, houses)
@@ -209,22 +216,25 @@ def commit_changes(map_id: int, changeset: Dict[str, List[Any]]):
                 new_houses = changeset.get("new_houses")
                 if new_houses:
                     house_tuples = [
-                        (map_id, h.get('x'), h.get('y'), h.get('capacity', 1), h.get('integrity'), json.dumps(h.get('storage', {})))
+                        (map_id, h.x, h.y, h.capacity, json.dumps(h.current_occupants), 
+                         h.food_storage, h.wood_storage, h.seeds_storage, h.build_tick, h.is_standing)
                         for h in new_houses
                     ]
                     conn.executemany(
-                        "INSERT INTO houses (map_id, x, y, capacity, integrity, storage) VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO houses (map_id, x, y, capacity, current_occupants, food_storage, wood_storage, seeds_storage, build_tick, is_standing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         house_tuples
                     )
 
                 new_villagers = changeset.get("new_villagers")
                 if new_villagers:
                     villager_tuples = [
-                        (map_id, v['house_id'], v['name'], v['gender'], v.get('age_in_ticks', 0), v.get('hunger', 100))
+                        (map_id, v.name, v.gender, v.age, v.age_in_ticks, v.x, v.y, v.house_id,
+                         v.hunger, v.food, v.wood, v.seeds, v.status.value, v.current_task,
+                         v.task_progress, v.last_reproduction_tick, v.is_alive)
                         for v in new_villagers
                     ]
                     conn.executemany(
-                        "INSERT INTO villagers (map_id, house_id, name, gender, age_in_ticks, hunger) VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO villagers (map_id, name, gender, age, age_in_ticks, x, y, house_id, hunger, food, wood, seeds, status, current_task, task_progress, last_reproduction_tick, is_alive) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         villager_tuples
                     )
 
@@ -245,11 +255,12 @@ def commit_changes(map_id: int, changeset: Dict[str, List[Any]]):
                 villager_updates = changeset.get("villager_updates")
                 if villager_updates:
                     update_tuples = [
-                        (v['age_in_ticks'], v['hunger'], v['x'], v['y'], v['status'], v.get('current_task'), v.get('task_progress'), v['house_id'], v['id']) 
+                        (v.age, v.age_in_ticks, v.x, v.y, v.house_id, v.hunger, v.food, v.wood, v.seeds,
+                         v.status.value, v.current_task, v.task_progress, v.last_reproduction_tick, v.is_alive, v.id) 
                         for v in villager_updates
                     ]
                     conn.executemany(
-                        "UPDATE villagers SET age_in_ticks=?, hunger=?, x=?, y=?, status=?, current_task=?, task_progress=?, house_id=? WHERE id=?",
+                        "UPDATE villagers SET age=?, age_in_ticks=?, x=?, y=?, house_id=?, hunger=?, food=?, wood=?, seeds=?, status=?, current_task=?, task_progress=?, last_reproduction_tick=?, is_alive=? WHERE id=?",
                         update_tuples
                     )
 
@@ -257,11 +268,11 @@ def commit_changes(map_id: int, changeset: Dict[str, List[Any]]):
                 house_updates = changeset.get("house_updates")
                 if house_updates:
                     update_tuples = [
-                        (json.dumps(h.get('storage', {})), h.get('integrity'), h.get('capacity'), h['id']) 
+                        (json.dumps(h.current_occupants), h.food_storage, h.wood_storage, h.seeds_storage, h.is_standing, h.id) 
                         for h in house_updates
                     ]
                     conn.executemany(
-                        "UPDATE houses SET storage=?, integrity=?, capacity=? WHERE id=?",
+                        "UPDATE houses SET current_occupants=?, food_storage=?, wood_storage=?, seeds_storage=?, is_standing=? WHERE id=?",
                         update_tuples
                     )
                 
@@ -322,46 +333,12 @@ def delete_map(map_id: int) -> bool:
         logger.error(f"删除地图时发生异常，地图ID {map_id}，错误信息：{e}")
         return False
 
-
-# --- RESTORED: 为 app.py 恢复房屋和村民创建函数 ---
-def create_virtual_house(map_id: int, initial_storage: Optional[Dict[str, Any]] = None) -> Optional[int]:
-    """为新村民创建一个虚拟房屋 (个人背包)。"""
-    storage_json = json.dumps(initial_storage or {})
-    try:
-        with closing(_get_connection()) as conn:
-            with conn:
-                cursor = conn.execute(
-                    "INSERT INTO houses (map_id, capacity, storage) VALUES (?, 1, ?)",
-                    (map_id, storage_json)
-                )
-                return cursor.lastrowid
-    except Exception as e:
-        logger.error(f"Failed to create virtual house for map {map_id}: {e}")
-        return None
-
-def insert_villager(map_id: int, house_id: int, name: str, gender: str, x: int, y: int, age_in_ticks: int = 0) -> Optional[int]:
-    """插入一个拥有基本信息、坐标和年龄的新村民。"""
-    try:
-        with closing(_get_connection()) as conn:
-            with conn:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO villagers (map_id, house_id, name, gender, x, y, age_in_ticks)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (map_id, house_id, name, gender, x, y, age_in_ticks)
-                )
-                return cursor.lastrowid
-    except Exception as e:
-        logger.error(f"Failed to insert villager into house {house_id}: {e}")
-        return None
-
 # --- 事件日志函数---
 
 def log_event(map_id: int, tick: int, event_type: str, payload: Dict[str, Any]):
     """
     记录一个游戏事件，用于增量更新。
-    此函数被设计为“即发即忘”，即使失败也不应中断主更新循环，
+    此函数被设计为"即发即忘"，即使失败也不应中断主更新循环，
     但会记录错误。
     """
     payload_json = json.dumps(payload)

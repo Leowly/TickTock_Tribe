@@ -59,3 +59,15 @@ class Config:
     def get_tasks(self) -> Dict[str, Any]:
         """获取任务相关的配置"""
         return self.data.get('tasks', {})
+    
+    def get_farming(self) -> Dict[str, Any]:
+        """获取农田相关的配置"""
+        return self.data.get('farming', {})
+    
+    def get_housing(self) -> Dict[str, Any]:
+        """获取房屋相关的配置"""
+        return self.data.get('housing', {})
+    
+    def get_ai(self) -> Dict[str, Any]:
+        """获取AI相关的配置"""
+        return self.data.get('ai', {})

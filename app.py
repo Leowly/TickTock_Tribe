@@ -44,6 +44,10 @@ def get_config():
         "view": config.get_view(),
         "villager": config.get_villager(),
         "time": config.get_time(),
+        "tasks": config.get_tasks(),
+        "farming": config.get_farming(),
+        "housing": config.get_housing(),
+        "ai": config.get_ai(),
     })
 
 
@@ -78,7 +82,7 @@ def get_maps():
 @app.route("/api/generate_map", methods=["POST"])
 def generate_map():
     """
-    生成新地图，并根据游戏机制创建初始村民。
+    生成新地图。初始村民将在第一个tick时由VillagerManager自动创建。
     """
     data = request.json or {}
     try:
@@ -108,51 +112,12 @@ def generate_map():
         if not map_id:
             return jsonify({"error": "Failed to save new map to database"}), 500
 
-        # --- 4. 创建初始村民 ---
-        villager_config = config.get_villager()
-        time_config = config.get_time()
-
-        initial_age_years = villager_config.get('initial_age_years', 20)
-        ticks_per_year = time_config.get('ticks_per_year', 365)
-        initial_age_in_ticks = initial_age_years * ticks_per_year
-        
-        initial_food = villager_config.get('initial_food', 50)
-        
-        # 在世界中心生成村民
-        center_x, center_y = width // 2, height // 2
-
-        # 创建一男一女
-        initial_villagers = [
-            {'name': 'Adam', 'gender': 'male'},
-            {'name': 'Eve', 'gender': 'female'}
-        ]
-        
-        for villager_data in initial_villagers:
-            # a. 为每个村民创建虚拟房屋(个人背包)和初始食物
-            house_id = database.create_virtual_house(map_id, initial_storage={"food": initial_food})
-            if not house_id:
-                # 如果创建虚拟房屋失败，这是一个严重问题，可以记录并跳过
-                logger.error(f"Failed to create virtual house for initial villager on map {map_id}")
-                continue
-            
-            # b. 将村民插入数据库，包含所有初始属性
-            # 注意：这需要 database.insert_villager 支持这些参数
-            database.insert_villager(
-                map_id=map_id,
-                house_id=house_id,
-                name=villager_data['name'],
-                gender=villager_data['gender'],
-                x=center_x,
-                y=center_y,
-                age_in_ticks=initial_age_in_ticks # 传递初始年龄
-            )
-        
-        # --- 5. 返回成功响应 ---
+        # --- 4. 返回成功响应 ---
         return jsonify({
             "success": True,
             "map_id": map_id,
             "name": name,
-            "message": f"Map created with {len(initial_villagers)} initial villagers at the center."
+            "message": f"Map created successfully. Initial villagers will be created when simulation starts."
         }), 201 # 201 Created
         
     except KeyError as e:
@@ -201,6 +166,26 @@ def simulation_status(map_id):
     return jsonify({"map_id": map_id, "is_running": is_running, "current_tick": current_tick}), 200
 
 
+@app.route("/api/maps/<int:map_id>/villagers", methods=["GET"])
+def get_villagers(map_id):
+    """获取指定地图的村民数据"""
+    snapshot = database.get_world_snapshot(map_id)
+    if not snapshot:
+        return jsonify({"error": "Map not found"}), 404
+    
+    # 使用VillagerManager获取村民数据
+    villager_manager = world_updater_instance.villager_manager
+    # 从数据库快照加载村民数据
+    villager_manager.load_from_database(snapshot)
+    villagers_data = villager_manager.get_villagers_data()
+    houses_data = villager_manager.get_houses_data()
+    
+    return jsonify({
+        "villagers": villagers_data,
+        "houses": houses_data
+    })
+
+
 @app.route("/api/debug/map_stats/<int:map_id>", methods=["GET"])
 def debug_map_stats(map_id):
     """调试接口：返回地图统计数据"""
@@ -224,7 +209,7 @@ def debug_map_stats(map_id):
         "readable_stats": {
             "PLAIN (0)": stats.get(0, 0), "FOREST (1)": stats.get(1, 0),
             "WATER (2)": stats.get(2, 0), "FARM_UNTILLED (3)": stats.get(3, 0),
-            "FARM_TILLED (4)": stats.get(4, 0),
+            "FARM_MATURE (4)": stats.get(4, 0),
         },
         "entity_counts": {
             "villagers": len(snapshot.villagers), "houses": len(snapshot.houses)

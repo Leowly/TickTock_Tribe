@@ -7,7 +7,7 @@ class MapViewer {
     this.canvas.style.cursor = 'grab';
 
     // --- 更新 TERRAIN_COLORS 以支持新的耕地状态 ---
-    // 0: PLAIN, 1: FOREST, 2: WATER, 3: FARM_UNTILLED, 4: FARM_TILLED
+    // 0: PLAIN, 1: FOREST, 2: WATER, 3: FARM_UNTILLED, 4: FARM_MATURE
     this.TERRAIN_COLORS = { 
       '0': '#F0E68C', // 浅绿黄色 (Khaki) - 平原
       '1': '#228B22', // 森林绿 (ForestGreen) - 森林
@@ -15,6 +15,17 @@ class MapViewer {
       '3': '#9ACD32', // 黄绿色 (YellowGreen) - 未成熟耕地
       '4': '#32CD32'  // 酸橙绿 (LimeGreen) - 已成熟耕地
     };
+
+    // 村民颜色
+    this.VILLAGER_COLORS = {
+      'male': '#FF6B6B',   // 红色 - 男性
+      'female': '#4ECDC4', // 青色 - 女性
+      'child': '#FFE66D',  // 黄色 - 儿童
+      'elderly': '#95A5A6' // 灰色 - 老年
+    };
+
+    // 房屋颜色
+    this.HOUSE_COLOR = '#8B4513'; // 棕色
 
     this.BASE_TILE_SIZE = 16;
     this.dpr = window.devicePixelRatio || 1;
@@ -35,6 +46,8 @@ class MapViewer {
     };
 
     this.worldData = null;
+    this.villagers = [];  // 村民数据
+    this.houses = [];     // 房屋数据
     this.mapId = null; // 存储当前地图ID
     this.dataRefreshIntervalId = null; // 存储数据刷新定时器ID
 
@@ -119,6 +132,7 @@ class MapViewer {
     const endX = Math.ceil((this.camera.x + window.innerWidth) / currentTileSize);
     const endY = Math.ceil((this.camera.y + window.innerHeight) / currentTileSize);
 
+    // 绘制地形
     for (let y = startY; y < endY; y++) {
       for (let x = startX; x < endX; x++) {
         if (x < 0 || y < 0 || x >= this.worldData.width || y >= this.worldData.height) continue;
@@ -143,7 +157,94 @@ class MapViewer {
       }
     }
 
+    // 绘制房屋
+    this.drawHouses(currentTileSize);
+
+    // 绘制村民
+    this.drawVillagers(currentTileSize);
+
     this.ctx.restore();
+  }
+
+  drawHouses(currentTileSize) {
+    if (!this.houses || this.houses.length === 0) return;
+
+    this.ctx.fillStyle = this.HOUSE_COLOR;
+    this.ctx.strokeStyle = '#000000';
+    this.ctx.lineWidth = 1;
+
+    for (const house of this.houses) {
+      if (!house.is_standing) continue;
+
+      const screenX = house.x * currentTileSize - this.camera.x;
+      const screenY = house.y * currentTileSize - this.camera.y;
+
+      // 检查是否在视口内
+      if (screenX + currentTileSize < 0 || screenX > window.innerWidth ||
+          screenY + currentTileSize < 0 || screenY > window.innerHeight) continue;
+
+      // 绘制房屋（稍大一些）
+      const houseSize = currentTileSize * 1.2;
+      this.ctx.fillRect(screenX - houseSize/4, screenY - houseSize/4, houseSize, houseSize);
+      this.ctx.strokeRect(screenX - houseSize/4, screenY - houseSize/4, houseSize, houseSize);
+
+      // 显示房屋信息
+      if (currentTileSize > 20) { // 只在足够放大时显示文字
+        this.ctx.fillStyle = '#FFFFFF';
+        this.ctx.font = `${Math.max(8, currentTileSize/4)}px Arial`;
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText(`${house.occupants}/${house.capacity}`, screenX + houseSize/2, screenY + houseSize/2 + 4);
+      }
+    }
+  }
+
+  drawVillagers(currentTileSize) {
+    if (!this.villagers || this.villagers.length === 0) return;
+
+    for (const villager of this.villagers) {
+      const screenX = villager.x * currentTileSize - this.camera.x;
+      const screenY = villager.y * currentTileSize - this.camera.y;
+
+      // 检查是否在视口内
+      if (screenX + currentTileSize < 0 || screenX > window.innerWidth ||
+          screenY + currentTileSize < 0 || screenY > window.innerHeight) continue;
+
+      // 确定村民颜色
+      let color = this.VILLAGER_COLORS[villager.gender];
+      if (villager.age < 6) {
+        color = this.VILLAGER_COLORS.child;
+      } else if (villager.age >= 65) {
+        color = this.VILLAGER_COLORS.elderly;
+      }
+
+      // 绘制村民（圆形）
+      const villagerSize = currentTileSize * 0.6;
+      this.ctx.fillStyle = color;
+      this.ctx.beginPath();
+      this.ctx.arc(screenX + currentTileSize/2, screenY + currentTileSize/2, villagerSize/2, 0, 2 * Math.PI);
+      this.ctx.fill();
+
+      // 绘制边框
+      this.ctx.strokeStyle = '#000000';
+      this.ctx.lineWidth = 1;
+      this.ctx.stroke();
+
+      // 显示村民信息
+      if (currentTileSize > 25) { // 只在足够放大时显示文字
+        this.ctx.fillStyle = '#FFFFFF';
+        this.ctx.font = `${Math.max(6, currentTileSize/5)}px Arial`;
+        this.ctx.textAlign = 'center';
+        
+        // 显示姓名和年龄
+        this.ctx.fillText(villager.name, screenX + currentTileSize/2, screenY - 5);
+        this.ctx.fillText(`${villager.age}岁`, screenX + currentTileSize/2, screenY + currentTileSize + 12);
+        
+        // 显示饥饿度
+        const hungerPercent = Math.round((villager.hunger / 100) * 100);
+        this.ctx.fillStyle = hungerPercent < 30 ? '#FF0000' : '#00FF00';
+        this.ctx.fillText(`饥饿:${hungerPercent}%`, screenX + currentTileSize/2, screenY + currentTileSize + 25);
+      }
+    }
   }
 
   setupEventListeners() {
@@ -434,6 +535,29 @@ class MapViewer {
     // --- 修改结束 ---
   }
 
+  // 加载村民数据
+  async loadVillagerData() {
+    if (this.mapId === null) {
+      throw new Error("Map ID is not set");
+    }
+    
+    try {
+      const response = await fetch(`/api/maps/${this.mapId}/villagers`);
+      if (!response.ok) {
+        console.warn("Failed to load villager data:", response.status);
+        return;
+      }
+      
+      const data = await response.json();
+      this.villagers = data.villagers || [];
+      this.houses = data.houses || [];
+      
+      console.log(`Loaded ${this.villagers.length} villagers and ${this.houses.length} houses`);
+    } catch (error) {
+      console.warn("Error loading villager data:", error);
+    }
+  }
+
   // --- 修改 initialize 方法 ---
   async initialize() {
     this.setupCanvas();
@@ -456,14 +580,18 @@ class MapViewer {
       // --- 加载初始地图数据 ---
       await this.loadMapData();
       
+      // --- 加载初始村民数据 ---
+      await this.loadVillagerData();
+      
       // --- 设置定期数据刷新 ---
       // 每 1000 毫秒 (1秒) 刷新一次数据
       this.dataRefreshIntervalId = setInterval(async () => {
           try {
               await this.loadMapData();
+              await this.loadVillagerData();
               // draw 循环会自动使用更新后的数据
           } catch (err) {
-              console.error("Error refreshing map data:", err);
+              console.error("Error refreshing data:", err);
               // 可以添加更健壮的错误处理
           }
       }, 1000); 

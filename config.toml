@@ -9,6 +9,9 @@ height = 1000
 seed_prob = 0.05
 iterations = 3
 birth_threshold = 2
+# 森林再生
+forest_regrowth_ticks = 5000  # 森林再生时间（几代人）
+forest_regrowth_probability = 0.01  # 森林再生概率
 
 [water]
 density = 0.001
@@ -16,12 +19,71 @@ turn_prob = 0.1
 stop_prob = 0.005
 height_influence = 5.0
 
-
 [villager]
-hunger_loss_per_tick = 1 # 每tick（每天）消耗1点饥饿度
-ticks_to_starve = 10    # 100点饥饿度，每tick掉1点，所以10 ticks后饿死
-reproduction_cooldown_ticks = 360 # 现在是360 ticks (360天)
+# 基础属性
+initial_age = 20  # 初始年龄（岁）
+initial_food = 50  # 初始食物数量
+initial_wood = 0   # 初始木材数量
+initial_seeds = 0  # 初始种子数量
+
+# 饥饿系统
+hunger_loss_per_tick = 25  # 每tick消耗的饥饿度
+max_hunger = 100          # 最大饥饿度
+ticks_to_starve = 5      # 饥饿度为0后多少tick死亡
+
+# 年龄系统
+ticks_per_year = 365      # 一年多少tick
+max_age = 100             # 最大年龄
+elderly_age = 65          # 老年开始年龄
+child_age = 6             # 儿童工作年龄
+adult_age = 18            # 成年年龄
+
+# 死亡概率（正态分布）
+death_probability_base = 0.001  # 基础死亡概率
+death_probability_peak_age = 80 # 死亡概率峰值年龄
+death_probability_peak = 0.1    # 峰值死亡概率
+
+# 繁殖系统
+reproduction_cooldown_ticks = 360  # 繁殖冷却时间
+reproduction_food_cost = 20        # 繁殖消耗食物
+reproduction_age_min = 18          # 最小繁殖年龄
+reproduction_age_max = 45          # 最大繁殖年龄
+reproduction_age_diff_max = 10     # 最大年龄差
+reproduction_chance = 0.1          # 繁殖概率
 
 [time]
-ticks_per_day = 1       # <--- 核心改动：现在1个Tick就是1天
-ticks_per_year = 365    # <--- 相应调整：一年现在是365个Ticks
+ticks_per_day = 1       # 1个Tick就是1天
+ticks_per_year = 365    # 一年365个Ticks
+
+[tasks]
+# 任务耗时（tick）
+build_farmland_ticks = 10    # 建造农田
+harvest_farm_ticks = 5       # 收获农田
+chop_tree_ticks = 10         # 砍树
+build_house_ticks = 50       # 建造房屋
+plant_tree_ticks = 5        # 种树
+
+# 任务产出
+chop_tree_wood_gain = 10     # 砍树获得木材
+chop_tree_seeds_gain = 20    # 砍树获得种子
+plant_tree_seeds_cost = 10   # 种树消耗种子
+build_house_wood_cost = 30   # 建造房屋消耗木材
+
+[farming]
+# 农田系统
+farm_mature_ticks = 30       # 农田成熟时间
+farm_water_distance = 2      # 农田距离水的最大距离
+farm_yield = 60              # 农田收获产量
+
+[housing]
+# 房屋系统
+house_capacity = 4           # 房屋最大容纳人数
+house_decay_ticks = 10000    # 房屋倒塌时间（很长）
+house_decay_probability = 0.001  # 房屋倒塌概率
+
+[ai]
+# AI决策参数
+hunger_threshold = 30        # 饥饿阈值，低于此值优先寻找食物
+food_security_threshold = 50 # 食物安全阈值，高于此值考虑其他活动
+work_efficiency_child = 0.3  # 儿童工作效率
+work_efficiency_elderly = 0.5 # 老年工作效率
