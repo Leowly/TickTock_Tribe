@@ -8,41 +8,102 @@
     body, html { margin: 0; padding: 0; overflow: hidden; background: #000; }
     canvas { display: block; touch-action: none; }
     .back-btn { position: fixed; top: 1rem; left: 1rem; padding: 0.5rem 1rem; 
-                background: rgba(0,0,0,0.5); color: white; border: none; 
-                border-radius: 4px; cursor: pointer; z-index: 10; /* 确保在canvas上方 */ }
+                background: rgba(0,0,0,0.5); color: white; border: 1px solid white;
+                border-radius: 4px; cursor: pointer; z-index: 10; font-family: sans-serif; }
     .back-btn:hover { background: rgba(0,0,0,0.7); }
+
+    /* 【全新】速度控制面板样式 */
+    .speed-controls {
+      position: fixed;
+      bottom: 1rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.6);
+      border-radius: 8px;
+      border: 1px solid #888;
+      padding: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      z-index: 10;
+      font-family: sans-serif;
+      color: white;
+    }
+    .speed-arrow-btn {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      background-color: rgba(255, 255, 255, 0.1);
+      color: white;
+      border: 1px solid #aaa;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1.2rem;
+      line-height: 1;
+      transition: background-color 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .speed-arrow-btn:hover {
+      background-color: rgba(255, 255, 255, 0.3);
+    }
+    .speed-arrow-btn:disabled {
+      color: #666;
+      background-color: rgba(0, 0, 0, 0.2);
+      cursor: not-allowed;
+      border-color: #666;
+    }
+    .speed-input {
+      width: 60px;
+      background-color: #111;
+      color: #eee;
+      border: 1px solid #888;
+      border-radius: 4px;
+      text-align: center;
+      font-size: 1rem;
+      padding: 0.3rem;
+      -moz-appearance: textfield; /* Firefox */
+    }
+    .speed-input::-webkit-outer-spin-button,
+    .speed-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
   </style>
 </head>
 <body>
   <canvas id="map-canvas"></canvas>
   <button class="back-btn" onclick="history.back()">返回</button>
+
+  <!-- 【全新】速度控制UI -->
+  <div class="speed-controls">
+    <button class="speed-arrow-btn" id="speed-down">«</button>
+    <input type="number" class="speed-input" id="speed-input" min="1" max="1000" value="1">
+    <span>x</span>
+    <button class="speed-arrow-btn" id="speed-up">»</button>
+  </div>
+
   <script src="{{ url_for('static', filename='map-viewer.js') }}"></script>
   <script>
-    (function() { // 使用 IIFE 创建局部作用域
-      let viewerInstance = null; // 存储 viewer 实例
-
+    (function() {
+      let viewerInstance = null;
       document.addEventListener('DOMContentLoaded', () => {
-        console.log("DOM fully loaded and parsed. Initializing MapViewer...");
+        console.log("DOM fully loaded. Initializing MapViewer...");
         const canvas = document.getElementById('map-canvas');
         if (canvas) {
           viewerInstance = new MapViewer(canvas);
-          viewerInstance.initialize().then(() => {
-            console.log("MapViewer initialized successfully.");
-          }).catch((error) => {
-            console.error("Error during MapViewer initialization:", error);
-          });
+          viewerInstance.initialize();
         } else {
           console.error("Canvas element not found!");
         }
       });
-      // 当用户关闭页面、刷新页面或导航到其他页面时触发
       window.addEventListener('beforeunload', (event) => {
-        console.log("Page is about to unload. Cleaning up...");
         if (viewerInstance) {
            viewerInstance.destroy();
         }
       });
-    })(); // IIFE 结束
+    })();
   </script>
 </body>
 </html>

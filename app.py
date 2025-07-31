@@ -169,9 +169,14 @@ def simulation_status(map_id):
 @app.route("/api/maps/<int:map_id>/villagers", methods=["GET"])
 def get_villagers(map_id):
     """获取指定地图的村民数据"""
+    #--------- 开始新增 ---------
+    ticker_instance.update_activity(map_id) # 每次请求都更新活动时间，作为心跳
+    #--------- 结束新增 ---------
+
     snapshot = database.get_world_snapshot(map_id)
     if not snapshot:
-        return jsonify({"error": "Map not found"}), 404
+        # 如果快照不存在，可能是模拟刚开始，返回空数据而不是错误
+        return jsonify({"villagers": [], "houses": []})
     
     # 使用VillagerManager获取村民数据
     villager_manager = world_updater_instance.villager_manager
@@ -217,5 +222,41 @@ def debug_map_stats(map_id):
     })
 
 
+@app.route("/api/villagers/<int:villager_id>", methods=["GET"])
+def get_single_villager(villager_id):
+    """【新增】获取单个村民的详细信息"""
+    villager_data = database.get_villager_by_id(villager_id)
+    if not villager_data:
+        return jsonify({"error": "Villager not found"}), 404
+    return jsonify(villager_data)
+
+
+@app.route("/api/houses/<int:house_id>", methods=["GET"])
+def get_single_house(house_id):
+    """【新增】获取单个房屋的详细信息"""
+    house_data = database.get_house_by_id(house_id)
+    if not house_data:
+        return jsonify({"error": "House not found"}), 404
+    return jsonify(house_data)
+
+@app.route("/api/simulation_speed", methods=["POST"])
+def set_simulation_speed():
+    """【新增】设置模拟速度"""
+    data = request.json
+    if not data or "speed" not in data:
+        return jsonify({"error": "Missing 'speed' parameter"}), 400
+    
+    try:
+        speed_multiplier = float(data["speed"])
+        if speed_multiplier < 0:
+            return jsonify({"error": "Speed multiplier cannot be negative"}), 400
+        
+        # 调用ticker实例的方法来设置速度
+        ticker_instance.set_speed(speed_multiplier)
+        
+        return jsonify({"success": True, "message": f"Simulation speed set to {speed_multiplier}x"})
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid 'speed' parameter, must be a number"}), 400
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=16151, debug=True)
+    app.run(host="0.0.0.0", port=16151, debug=False)

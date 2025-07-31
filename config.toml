@@ -22,7 +22,7 @@ height_influence = 5.0
 [villager]
 # 基础属性
 initial_age = 20  # 初始年龄（岁）
-initial_food = 50  # 初始食物数量
+initial_food = 30  # 初始食物数量
 initial_wood = 0   # 初始木材数量
 initial_seeds = 0  # 初始种子数量
 

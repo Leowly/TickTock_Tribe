@@ -384,3 +384,24 @@ def get_events_since_tick(map_id: int, since_tick: int) -> List[Dict[str, Any]]:
         logger.error(f"Error fetching events for map {map_id} since tick {since_tick}: {e}")
         # 在发生任何错误时，安全地返回一个空列表
         return []
+
+def get_villager_by_id(villager_id: int) -> Optional[Dict[str, Any]]:
+    """根据ID获取单个村民的详细数据。"""
+    with closing(_get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute("SELECT * FROM villagers WHERE id=?", (villager_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def get_house_by_id(house_id: int) -> Optional[Dict[str, Any]]:
+    """根据ID获取单个房屋的详细数据。"""
+    with closing(_get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute("SELECT * FROM houses WHERE id=?", (house_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        house_data = dict(row)
+        # 解析JSON字段
+        house_data['current_occupants'] = json.loads(house_data.get('current_occupants') or '[]')
+        return house_data

@@ -16,17 +16,37 @@ class Ticker:
         初始化 Ticker。
         Args:
             world_updater: 一个实现了 .update(map_id, tick) 方法的对象。
-            tick_interval: 每个tick之间的秒数。
+            tick_interval: 每个tick之间的秒数 (这是1x速的基础)。
             inactivity_timeout: 模拟无活动自动停止的秒数。
         """
-        self.world_updater = world_updater # 存储注入的依赖
+        self.world_updater = world_updater
+        
+        # 【修改】保存基础速率，并使当前速率可变
+        self.base_tick_interval = tick_interval
         self.tick_interval = tick_interval
+        
         self.inactivity_timeout = inactivity_timeout
         self.active_maps: Dict[int, int] = {}
         self.last_activity: Dict[int, float] = {}
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
+
+    def set_speed(self, speed_multiplier: float):
+        """
+        【新增】设置模拟速度。
+        Args:
+            speed_multiplier:速度倍率 (例如 1, 2, 5)。0表示暂停。
+        """
+        with self._lock:
+            if speed_multiplier > 0:
+                # 速度越快，间隔越短
+                self.tick_interval = self.base_tick_interval / speed_multiplier
+                logger.info(f"Ticker speed set to {speed_multiplier}x. New interval: {self.tick_interval:.2f}s")
+            else:
+                # 暂停：设置一个超长的间隔时间
+                self.tick_interval = 3600  # 暂停1小时
+                logger.info("Ticker paused.")
 
     def start_simulation(self, map_id: int):
         """为指定地图启动模拟"""
@@ -93,7 +113,8 @@ class Ticker:
             if not maps_to_update:
                 time.sleep(self.tick_interval)
                 continue
-                
+            
+            # 【修改】使用可变的 tick_interval
             time.sleep(self.tick_interval)
 
             with self._lock:
@@ -101,7 +122,6 @@ class Ticker:
                     if map_id in self.active_maps:
                         current_tick = self.active_maps[map_id]
                         
-                        # 使用注入的 world_updater 实例
                         success = self.world_updater.update(map_id, current_tick)
                         
                         if success:
