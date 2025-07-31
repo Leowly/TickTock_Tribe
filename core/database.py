@@ -41,9 +41,13 @@ DB_PATH = os.path.join(DATA_DIR, 'world_maps.db')
 
 # --- 内部辅助函数 ---
 def _get_connection():
-    """获取数据库连接，并启用外键约束"""
-    conn = sqlite3.connect(DB_PATH)
+    """
+    【修改】获取数据库连接，并启用外键约束和WAL模式以支持高并发。
+    """
+    # 增加 timeout 参数，并启用 WAL 模式
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode=WAL;") # 关键改动：启用预写日志模式
     return conn
 
 def _unpack_3bit_bytes(packed_bytes: bytes, width: int, height: int) -> List[List[int]]:

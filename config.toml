@@ -2,8 +2,8 @@
 max_visible_pixels = 25000
 
 [world]
-width = 1000
-height = 1000
+width = 100
+height = 100
 
 [forest]
 seed_prob = 0.05
@@ -30,7 +30,7 @@ initial_seeds = 0  # 初始种子数量
 hunger_loss_per_tick = 25  # 每tick消耗的饥饿度
 max_hunger = 100          # 最大饥饿度
 ticks_to_starve = 5      # 饥饿度为0后多少tick死亡
-hunger_per_food = 25      #  【新增】每单位食物恢复的饥饿度
+hunger_per_food = 50      #  【新增】每单位食物恢复的饥饿度
 
 # 年龄系统
 ticks_per_year = 365      # 一年多少tick
@@ -73,7 +73,7 @@ build_house_wood_cost = 30   # 建造房屋消耗木材
 [farming]
 # 农田系统
 farm_mature_ticks = 30       # 农田成熟时间
-farm_water_distance = 2      # 农田距离水的最大距离
+farm_water_distance = 1      # 农田距离水的最大距离
 farm_yield = 60              # 农田收获产量
 
 [housing]
@@ -84,7 +84,7 @@ house_decay_probability = 0.001  # 房屋倒塌概率
 
 [ai]
 # AI决策参数
-hunger_threshold = 30        # 饥饿阈值，低于此值优先寻找食物
+hunger_threshold = 40        # 饥饿阈值，低于此值优先寻找食物
 food_security_threshold = 50 # 食物安全阈值，高于此值考虑其他活动
 work_efficiency_child = 0.3  # 儿童工作效率
 work_efficiency_elderly = 0.5 # 老年工作效率

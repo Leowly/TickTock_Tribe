@@ -20,6 +20,7 @@ class VillagerStatus(Enum):
     WORKING = "working"
     MOVING = "moving"
 
+# 【新增】MOVE_TO_WATER 任务类型
 class TaskType(Enum):
     HARVEST_FARM = "harvest_farm"
     CHOP_TREE = "chop_tree"
@@ -28,6 +29,7 @@ class TaskType(Enum):
     PLANT_TREE = "plant_tree"
     STORE_RESOURCES = "store_resources"
     TAKE_FOOD_FROM_HOUSE = "take_food_from_house"
+    MOVE_TO_WATER = "move_to_water" # 新增的任务
 
 @dataclass
 class Villager:
@@ -85,7 +87,7 @@ class VillagerManager:
         self.initial_food = villager_cfg.get('initial_food', 50)
         self.initial_wood = villager_cfg.get('initial_wood', 0)
         self.initial_seeds = villager_cfg.get('initial_seeds', 0)
-        self.hunger_loss_per_tick = villager_cfg.get('hunger_loss_per_tick', 25)
+        self.hunger_loss_per_tick = villager_cfg.get('hunger_loss_per_tick', 0.1)
         self.max_hunger = villager_cfg.get('max_hunger', 100)
         self.ticks_to_starve = villager_cfg.get('ticks_to_starve', 5)
         self.hunger_per_food = villager_cfg.get('hunger_per_food', 25)
@@ -111,6 +113,7 @@ class VillagerManager:
             TaskType.PLANT_TREE: tasks_cfg.get('plant_tree_ticks', 5),
             TaskType.STORE_RESOURCES: 1,
             TaskType.TAKE_FOOD_FROM_HOUSE: 1,
+            TaskType.MOVE_TO_WATER: 1, # 移动任务瞬间完成，主要靠MOVING状态
         }
         self.chop_tree_wood_gain = tasks_cfg.get('chop_tree_wood_gain', 10)
         self.chop_tree_seeds_gain = tasks_cfg.get('chop_tree_seeds_gain', 20)
@@ -206,7 +209,7 @@ class VillagerManager:
         else:
             villager.hunger = max(0, villager.hunger - self.hunger_loss_per_tick)
 
-        if villager.hunger < 80 and villager.food > 0:
+        if villager.hunger <= self.max_hunger - self.hunger_per_food and villager.food > 0:
             food_to_eat = min(villager.food, 1)
             villager.food -= food_to_eat
             villager.hunger = min(self.max_hunger, villager.hunger + food_to_eat * self.hunger_per_food)
@@ -234,131 +237,105 @@ class VillagerManager:
                 return False
         return True
 
-    #--------- 开始修改 (增加大量日志) ---------
     def _decide_next_action(self, villager: Villager, world_grid: List[List[int]]):
-        """全新的AI决策树，解决优先级问题，并增加详细调试日志"""
-        log_prefix = f"[AI DEBUG Villager {villager.name} (ID: {villager.id})]"
-        logger.debug(f"{log_prefix} --- Start Decision ---")
-
+        """
+        【最终修正版】AI决策树
+        核心改动：将建立农田的优先级置于建立房屋之上。
+        """
+        log_prefix = f"[AI DEBUG Villager {villager.name} (ID: {villager.id}, hunger: {villager.hunger})]"
+        
         if not self._can_work(villager):
-            logger.debug(f"{log_prefix} Cannot Work (age: {villager.age}). No action taken.")
             return
 
-        logger.debug(f"{log_prefix} Can Work: True")
-
-        # 优先级 0: 资源管理
-        logger.debug(f"{log_prefix} P0: Checking inventory... food={villager.food}, wood={villager.wood}, seeds={villager.seeds}")
-        if villager.food > 0 or villager.wood > 0 or villager.seeds > 0:
-            if villager.house_id and villager.house_id in self.houses:
-                house = self.houses[villager.house_id]
-                logger.debug(f"{log_prefix} P0: Has inventory and a house. Setting move task to STORE_RESOURCES at ({house.x}, {house.y}).")
-                self._set_move_task(villager, TaskType.STORE_RESOURCES, (house.x, house.y))
-                return
-            else:
-                logger.debug(f"{log_prefix} P0: Has inventory but no house to store. Skipping storage task.")
-        
-        # 优先级 1: 紧急生存
-        logger.debug(f"{log_prefix} P1: Checking hunger... hunger={villager.hunger} (threshold={self.hunger_threshold})")
+        # 优先级 1: 紧急生存 - 饥饿
         if villager.hunger < self.hunger_threshold:
-            logger.debug(f"{log_prefix} P1: Is hungry.")
-            if villager.house_id and villager.house_id in self.houses:
-                house = self.houses[villager.house_id]
-                logger.debug(f"{log_prefix} P1: Checking house {house.id} for food... food_storage={house.food_storage}")
-                if house.food_storage > 0:
-                    logger.debug(f"{log_prefix} P1: House has food. Setting move task to TAKE_FOOD_FROM_HOUSE.")
-                    self._set_move_task(villager, TaskType.TAKE_FOOD_FROM_HOUSE, (house.x, house.y))
-                    return
-            logger.debug(f"{log_prefix} P1: No food in house or no house. Finding food outside.")
+            logger.debug(f"{log_prefix} P1: Critically hungry. Finding food.")
             self._find_food_action(villager, world_grid)
             return
-        
-        # 优先级 2: 建立食物来源
+
+        # --- 【核心逻辑修正】 START ---
+        # 优先级 2: 建立可持续的食物来源 (农田)
+        # 吃饭问题优先于住房问题！
+        population = len([v for v in self.villagers.values() if v.is_alive and not v.age < self.child_age])
         farm_count = self._count_farms(world_grid)
-        logger.debug(f"{log_prefix} P2: Checking farm count... farms={farm_count} (required=2)")
-        if farm_count < 2:
-            logger.debug(f"{log_prefix} P2: Need more farms.")
-            if self._can_work(villager, TaskType.BUILD_FARMLAND):
-                logger.debug(f"{log_prefix} P2: Can build farm. Finding farmland site...")
-                site = self._find_farmland_site(villager.x, villager.y, world_grid)
-                if site:
-                    logger.debug(f"{log_prefix} P2: Found site at {site}. Setting move task to BUILD_FARMLAND.")
-                    self._set_move_task(villager, TaskType.BUILD_FARMLAND, site)
-                    return
-                else:
-                    logger.debug(f"{log_prefix} P2: No suitable farmland site found.")
+        required_farms = math.ceil(population / 2.0) + 1 # +1作为缓冲
+
+        if farm_count < required_farms and self._can_work(villager, TaskType.BUILD_FARMLAND):
+            logger.debug(f"{log_prefix} P2: Farm count insufficient ({farm_count}/{required_farms}). Prioritizing farm building.")
+            farmland_site = self._find_farmland_site(villager.x, villager.y, world_grid)
+            if farmland_site:
+                logger.debug(f"{log_prefix} P2: Found valid farm site at {farmland_site}.")
+                self._set_move_task(villager, TaskType.BUILD_FARMLAND, farmland_site)
+                return
             else:
-                logger.debug(f"{log_prefix} P2: Cannot build farm due to age restrictions.")
-        
-        # 优先级 3: 建立住所
-        logger.debug(f"{log_prefix} P3: Checking housing... house_id={villager.house_id}")
+                # B计划：如果找不到合适的地块，就先移动到最近的水源旁边
+                logger.debug(f"{log_prefix} P2-B: No valid farm site found. Moving to nearest water source.")
+                water_site = self._find_nearest_target(villager.x, villager.y, world_grid, WATER)
+                if water_site:
+                    self._set_move_task(villager, TaskType.MOVE_TO_WATER, water_site)
+                    return
+        # --- 【核心逻辑修正】 END ---
+
+        # 优先级 3: 建立住所 (只有在食物生产有保障后才考虑)
         if not villager.house_id:
-            logger.debug(f"{log_prefix} P3: Is homeless.")
+            logger.debug(f"{log_prefix} P3: Homeless. Seeking to build house.")
             if self._can_work(villager, TaskType.BUILD_HOUSE):
-                logger.debug(f"{log_prefix} P3: Checking wood for house... wood={villager.wood} (required={self.build_house_wood_cost})")
                 if villager.wood >= self.build_house_wood_cost:
-                    logger.debug(f"{log_prefix} P3: Has enough wood. Finding house site...")
                     site = self._find_house_site(villager.x, villager.y, world_grid)
                     if site:
-                        logger.debug(f"{log_prefix} P3: Found site at {site}. Setting move task to BUILD_HOUSE.")
                         self._set_move_task(villager, TaskType.BUILD_HOUSE, site)
                         return
-                    else:
-                        logger.debug(f"{log_prefix} P3: No suitable house site found.")
-                else:
-                    logger.debug(f"{log_prefix} P3: Not enough wood. Finding a tree to chop...")
+                else: # 木材不足，去砍树
                     site = self._find_nearest_target(villager.x, villager.y, world_grid, FOREST)
                     if site:
-                        logger.debug(f"{log_prefix} P3: Found tree at {site}. Setting move task to CHOP_TREE.")
                         self._set_move_task(villager, TaskType.CHOP_TREE, site)
                         return
-                    else:
-                        logger.debug(f"{log_prefix} P3: No trees found.")
-            else:
-                logger.debug(f"{log_prefix} P3: Cannot build house due to age restrictions.")
 
-        # 优先级 4: 食物储备
+        # 优先级 4: 保障食物储备 (如果当前不饿，但家里存粮少)
         family_food = villager.food
         if villager.house_id and villager.house_id in self.houses:
             family_food += self.houses[villager.house_id].food_storage
-        logger.debug(f"{log_prefix} P4: Checking food security... family_food={family_food} (security_threshold={self.food_security_threshold})")
         if family_food < self.food_security_threshold:
-            logger.debug(f"{log_prefix} P4: Food is not secure. Finding food...")
+            logger.debug(f"{log_prefix} P4: Food security low. Finding food to harvest.")
             self._find_food_action(villager, world_grid)
             return
 
-        # 优先级 5: 常规生产
-        logger.debug(f"{log_prefix} P5: Food and housing are secure. Performing productive action...")
+        # 优先级 5: 存储多余资源
+        is_inventory_full = villager.food > 40 or villager.wood > 20 or villager.seeds > 30
+        if is_inventory_full and villager.house_id and villager.house_id in self.houses:
+            house = self.houses[villager.house_id]
+            self._set_move_task(villager, TaskType.STORE_RESOURCES, (house.x, house.y))
+            return
+            
+        # 优先级 6: 常规生产 (砍树)
+        logger.debug(f"{log_prefix} P6: All needs met. Performing general tasks like chopping wood.")
         self._productive_action(villager, world_grid)
-        
-        logger.debug(f"{log_prefix} --- End Decision: No action taken ---")
-    #--------- 结束修改 ---------
 
     def _count_farms(self, world_grid: List[List[int]]) -> int:
         count = 0
         for y in range(len(world_grid)):
             for x in range(len(world_grid[0])):
                 tile = world_grid[y][x]
-                # Also count farms that are targeted for harvesting, as they will be replanted
-                if tile in [FARM_UNTILLED, FARM_MATURE] or (x, y) in self.targeted_coords:
-                     is_farm_task = False
+                if tile in [FARM_UNTILLED, FARM_MATURE]:
+                    count += 1
+                # 也计算那些已经被其他村民锁定为目标的农田
+                elif (x, y) in self.targeted_coords:
                      for v in self.villagers.values():
-                         if v.current_task and f":{x},{y}" in v.current_task and "HARVEST_FARM" in v.current_task:
-                             is_farm_task = True
+                         if v.current_task and f":{x},{y}" in v.current_task and ("BUILD_FARMLAND" in v.current_task or "HARVEST_FARM" in v.current_task):
+                             count +=1
                              break
-                     if not is_farm_task:
-                        count +=1
-
         return count
     
     def _release_target_lock(self, villager: Villager):
         if villager.current_task:
             try:
                 parts = villager.current_task.split(':')
-                coords_str = parts[-1]
-                x_str, y_str = coords_str.split(',')
-                coords: Tuple[int, int] = (int(x_str), int(y_str))
-                if coords in self.targeted_coords:
-                    self.targeted_coords.remove(coords)
+                if len(parts) > 1:
+                    coords_str = parts[-1]
+                    x_str, y_str = coords_str.split(',')
+                    coords: Tuple[int, int] = (int(x_str), int(y_str))
+                    if coords in self.targeted_coords:
+                        self.targeted_coords.remove(coords)
             except (ValueError, IndexError):
                 pass
 
@@ -440,6 +417,10 @@ class VillagerManager:
         return 1.0
     
     def _complete_task(self, villager: Villager, task_type: TaskType, x: int, y: int, world_grid: List[List[int]], changeset: Dict[str, Any], current_tick: int = 0):
+        if task_type == TaskType.MOVE_TO_WATER:
+            logger.debug(f"Villager {villager.name} arrived at water source. Will re-evaluate tasks.")
+            return
+
         if task_type == TaskType.BUILD_FARMLAND:
             if world_grid[y][x] == PLAIN and self._is_near_water(x, y, world_grid):
                 world_grid[y][x] = FARM_UNTILLED
@@ -499,13 +480,10 @@ class VillagerManager:
     
     def _set_move_task(self, villager: Villager, task_type: TaskType, site: Tuple[int, int]) -> bool:
         target_x, target_y = site
-        distance_sq = (villager.x - target_x)**2 + (villager.y - target_y)**2
-        if distance_sq <= 10000:
-            self.targeted_coords.add(site)
-            villager.status = VillagerStatus.MOVING
-            villager.current_task = f"move:{task_type.value}:{target_x},{target_y}"
-            return True
-        return False
+        self.targeted_coords.add(site)
+        villager.status = VillagerStatus.MOVING
+        villager.current_task = f"move:{task_type.value}:{target_x},{target_y}"
+        return True
 
     def _find_food_action(self, villager: Villager, world_grid: List[List[int]]):
         mature_farm = self._find_nearest_target(villager.x, villager.y, world_grid, FARM_MATURE)
@@ -517,44 +495,47 @@ class VillagerManager:
                 return
     
     def _productive_action(self, villager: Villager, world_grid: List[List[int]]):
-        actions = []
+        # In this simplified model, the primary productive action when not building is chopping wood
         if self._can_work(villager, TaskType.CHOP_TREE):
-            actions.append((TaskType.CHOP_TREE, lambda: self._find_nearest_target(villager.x, villager.y, world_grid, FOREST)))
-        if self._can_work(villager, TaskType.PLANT_TREE) and villager.seeds >= self.plant_tree_seeds_cost:
-             actions.append((TaskType.PLANT_TREE, lambda: self._find_nearest_target(villager.x, villager.y, world_grid, PLAIN)))
-        if self._can_work(villager, TaskType.BUILD_HOUSE) and villager.wood >= self.build_house_wood_cost:
-            homeless_count = sum(1 for v in self.villagers.values() if v.is_alive and not v.house_id)
-            if homeless_count > 0:
-                 actions.append((TaskType.BUILD_HOUSE, lambda: self._find_house_site(villager.x, villager.y, world_grid)))
-        if not actions: return
-        random.shuffle(actions)
-        task_type, finder_func = actions[0]
-        site = finder_func()
-        if site: self._set_move_task(villager, task_type, site)
-    
+            site = self._find_nearest_target(villager.x, villager.y, world_grid, FOREST)
+            if site:
+                self._set_move_task(villager, TaskType.CHOP_TREE, site)
+
     def _find_nearest_target(self, x: int, y: int, world_grid: List[List[int]], target_tile: int) -> Optional[Tuple[int, int]]:
-        max_radius = 100
+        max_radius = 250  # Enlarged search radius
         for r in range(max_radius + 1):
             coords_to_check = set()
             for i in range(r + 1):
                 j = r - i
-                if i == 0 and j == 0: coords_to_check.add((x, y))
-                else: coords_to_check.update([(x + i, y + j), (x - i, y + j), (x + i, y - j), (x - i, y - j)])
-            for nx, ny in sorted(list(coords_to_check)):
+                if i == 0 and j == 0: 
+                    coords_to_check.add((x, y))
+                else: 
+                    coords_to_check.update([(x + i, y + j), (x - i, y + j), (x + i, y - j), (x - i, y - j)])
+            
+            coord_list = sorted(list(coords_to_check))
+            random.shuffle(coord_list)
+
+            for nx, ny in coord_list:
                 if (0 <= nx < len(world_grid[0]) and 0 <= ny < len(world_grid)):
                     if world_grid[ny][nx] == target_tile and (nx, ny) not in self.targeted_coords:
                         return (nx, ny)
         return None
     
     def _find_farmland_site(self, x: int, y: int, world_grid: List[List[int]]) -> Optional[Tuple[int, int]]:
-        max_radius = 100
+        max_radius = 250 # Enlarged search radius
         for r in range(max_radius + 1):
             coords_to_check = set()
             for i in range(r + 1):
                 j = r - i
-                if i == 0 and j == 0: coords_to_check.add((x, y))
-                else: coords_to_check.update([(x + i, y + j), (x - i, y + j), (x + i, y - j), (x - i, y - j)])
-            for nx, ny in sorted(list(coords_to_check)):
+                if i == 0 and j == 0: 
+                    coords_to_check.add((x, y))
+                else: 
+                    coords_to_check.update([(x + i, y + j), (x - i, y + j), (x + i, y - j), (x - i, y - j)])
+
+            coord_list = sorted(list(coords_to_check))
+            random.shuffle(coord_list)
+
+            for nx, ny in coord_list:
                 if (0 <= nx < len(world_grid[0]) and 0 <= ny < len(world_grid)):
                     if world_grid[ny][nx] == PLAIN and (nx, ny) not in self.targeted_coords and self._is_near_water(nx, ny, world_grid):
                         return (nx, ny)

@@ -30,6 +30,7 @@ class MapViewer {
     this.houses = [];
     this.mapId = null;
     this.dataRefreshIntervalId = null;
+    this.mapRefreshIntervalId = null;
 
     this.tooltip = { active: false, type: null, id: null, data: null, screenX: 0, screenY: 0 };
     this.hoverDebounceTimer = null;
@@ -553,46 +554,87 @@ class MapViewer {
   }
 
   adjustFrontendRefreshRate() {
+    // 停止旧的定时器
     if (this.dataRefreshIntervalId) { clearInterval(this.dataRefreshIntervalId); }
-    const refreshRate = Math.min(this.speed, this.maxFrontendRefreshRate);
-    const newInterval = 1000 / refreshRate;
-    console.log(`Adjusting frontend refresh rate. Speed: ${this.speed}x, Rate: ${refreshRate}Hz, Interval: ${newInterval.toFixed(0)}ms`);
+    if (this.mapRefreshIntervalId) { clearInterval(this.mapRefreshIntervalId); } // 【新增】停止旧的地图定时器
+
+    // 设置实体（村民、房屋）的刷新率，这个可以快一些
+    const entityRefreshRate = Math.min(this.speed, this.maxFrontendRefreshRate);
+    const entityInterval = 1000 / entityRefreshRate;
+    console.log(`Adjusting entity refresh rate. Speed: ${this.speed}x, Rate: ${entityRefreshRate}Hz, Interval: ${entityInterval.toFixed(0)}ms`);
     this.dataRefreshIntervalId = setInterval(async () => {
       try { await this.loadVillagerData(); }
-      catch (err) { console.error("Error refreshing data:", err); }
-    }, newInterval);
+      catch (err) { console.error("Error refreshing entity data:", err); }
+    }, entityInterval);
+
+    // 【新增】设置地图地形的刷新率，这个可以慢一些，避免不必要的性能开销
+    const mapRefreshInterval = 2000; // 每2秒刷新一次地图
+    console.log(`Setting map terrain refresh interval to ${mapRefreshInterval}ms`);
+    this.mapRefreshIntervalId = setInterval(async () => {
+        try {
+            await this.loadMapData();
+        } catch(err) {
+            console.error("Error refreshing map data:", err);
+        }
+    }, mapRefreshInterval);
   }
 
   async initialize() {
+    // 1. 设置画布尺寸以匹配窗口
     this.setupCanvas();
+
+    // 2. 使用 try...catch 块来处理任何初始化过程中可能发生的错误
     try {
+      // 3. 从URL路径中解析出地图ID
       const pathParts = window.location.pathname.split('/');
       this.mapId = parseInt(pathParts[pathParts.length - 1], 10);
-      if (isNaN(this.mapId)) { throw new Error('Invalid map ID in URL'); }
+      if (isNaN(this.mapId)) {
+        throw new Error('URL中的地图ID无效 (Invalid map ID in URL)');
+      }
       
+      // 4. 获取全局配置信息（例如视图参数）
       const configRes = await fetch('/api/config');
       const config = await configRes.json();
       this.camera.maxVisiblePixels = config.view.max_visible_pixels;
       
+      // 5. 通知后端启动此地图的模拟
       await this.startSimulation();
+      
+      // 6. 设置后端的初始模拟速度为前端的默认速度 (1x)
       await this.setBackendSimulationSpeed(this.speed); 
       
-      await this.loadMapData();
-      await this.loadVillagerData();
+      // 7. 加载初始世界状态
+      await this.loadMapData();      // 加载地形数据
+      await this.loadVillagerData(); // 加载村民和房屋数据
       
+      // 8. 启动前端的定时刷新机制
+      // 这会创建两个定时器：一个用于高频刷新村民/房屋，一个用于低频刷新地形
       this.adjustFrontendRefreshRate();
+      
+      // 9. 绑定速度控制面板的UI事件
       this.setupSpeedControls();
       
-      this.updateMinZoom();
+      // 10. 设置相机初始位置和缩放
+      this.updateMinZoom(); // 根据配置计算最小缩放级别
       const initialTileSize = this.BASE_TILE_SIZE * this.camera.zoom;
+      // 将相机定位到地图中心
       this.camera.x = (this.worldData.width * initialTileSize - window.innerWidth * this.dpr) / 2;
       this.camera.y = (this.worldData.height * initialTileSize - window.innerHeight * this.dpr) / 2;
-      this.constrainCamera();
+      this.constrainCamera(); // 确保相机不超出地图边界
+
+      // 11. 启动渲染循环
       this.startGameLoop();
+
     } catch (error) {
+      // 12. 如果初始化过程中任何步骤失败，则执行以下操作
       console.error("初始化失败:", error);
+      
+      // 关键：清除可能已创建的任何定时器，防止内存泄漏
       if (this.dataRefreshIntervalId) { clearInterval(this.dataRefreshIntervalId); }
-      document.body.innerHTML = `<h1>加载地图失败</h1><p style="color:red;">${error.message}</p>`;
+      if (this.mapRefreshIntervalId) { clearInterval(this.mapRefreshIntervalId); }
+      
+      // 在页面上向用户显示清晰的错误信息
+      document.body.innerHTML = `<h1>加载地图失败</h1><p style="color:red;">${error.message}</p><p>请尝试返回主页或刷新。</p>`;
     }
   }
 
@@ -600,8 +642,14 @@ class MapViewer {
       if (this.dataRefreshIntervalId) {
           clearInterval(this.dataRefreshIntervalId);
           this.dataRefreshIntervalId = null;
-          console.log("Data refresh interval cleared.");
       }
+      // 【新增】清理地图刷新定时器
+      if (this.mapRefreshIntervalId) {
+          clearInterval(this.mapRefreshIntervalId);
+          this.mapRefreshIntervalId = null;
+      }
+      console.log("All refresh intervals cleared.");
+      
       await this.setBackendSimulationSpeed(1);
       await this.stopSimulation();
   }
