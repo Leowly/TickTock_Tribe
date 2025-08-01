@@ -149,15 +149,18 @@ class VillagerManager:
         return pairs
 
     def update_villagers(self, current_tick: int, world_grid: List[List[int]]) -> Dict[str, Any]:
-        """【新】引入优先级中断，允许村民在饥饿时放弃当前任务"""
         self.targeted_coords.clear()
         
         changeset: Dict[str, List[Any]] = {
             "tile_changes": [], "villager_updates": [], "house_updates": [], "new_villagers": [],
             "new_houses": [], "deleted_villager_ids": [], "deleted_house_ids": [],
-            "build_and_move_requests": []
+            "build_and_move_requests": [], "move_in_requests": [], "homeless_updates": []
         }
         
+        # --- 【核心修正】START: 引入“已处理”集合 ---
+        handled_villager_ids = set()
+        # --- 【核心修正】END ---
+
         self._update_farm_maturity(current_tick, world_grid, changeset)
         
         villagers_to_process = list(self.villagers.values())
@@ -165,46 +168,42 @@ class VillagerManager:
 
         for villager in villagers_to_process:
             if not villager.is_alive: continue
-
-            # 1. 先更新基础状态
+                
             self._update_age_and_death(villager, changeset)
             if not villager.is_alive: continue
             self._update_hunger(villager, changeset)
             if not villager.is_alive: continue
             
-            # --- 【核心修正】START: 优先级中断检查 ---
-            # 检查村民是否处于饥饿的紧急状态
+            # 中断逻辑
             is_in_emergency = villager.hunger < self.hunger_threshold
-            
-            # 检查当前任务是否是为了解决这个紧急状态（即，是否是去获取食物）
-            is_handling_emergency = villager.current_task and ("HARVEST_FARM" in villager.current_task)
-
-            # 如果处于紧急状态，但当前做的事情却不是为了解决它，则必须中断！
+            is_handling_emergency = villager.current_task and "HARVEST_FARM" in villager.current_task
             if is_in_emergency and not is_handling_emergency and villager.status != VillagerStatus.IDLE:
-                logger.debug(f"!!! INTERRUPT !!! Villager {villager.name} is critically hungry (hunger: {villager.hunger}). "
-                             f"Stopping current task '{villager.current_task}' to find food.")
-                
-                self._release_target_lock(villager) # 释放旧任务占用的地块
+                self._release_target_lock(villager)
                 villager.status = VillagerStatus.IDLE
                 villager.current_task = None
                 villager.task_progress = 0
-            # --- 【核心修正】END ---
 
-            # 2. 根据村民的当前状态执行行动
-            # 如果村民是空闲的（或者刚刚被中断任务变为空闲），则为他决策
             if villager.status == VillagerStatus.IDLE:
                 self._decide_next_action(villager, world_grid)
             
-            # 如果村民正在移动或工作，则继续处理
             if villager.status == VillagerStatus.MOVING:
                 self._process_movement(villager)
             elif villager.status == VillagerStatus.WORKING:
                 self._process_task(villager, current_tick, world_grid, changeset)
             
-            # 确保村民的最新状态被记录
-            if villager not in changeset["villager_updates"]:
-                changeset["villager_updates"].append(villager)
-        
+            # --- 【核心修正】START: 检查是否已处理 ---
+            # 如果一个村民参与了“搬家”或“建房”等改变核心ID的特殊操作，
+            # 那么他的状态将由数据库原子化处理，我们不能再将他的旧状态加入常规更新列表
+            # 我们通过检查 changeset 来判断
+            special_requests = changeset.get("build_and_move_requests", []) + changeset.get("move_in_requests", []) + changeset.get("homeless_updates", [])
+            for request in special_requests:
+                handled_villager_ids.add(request[0].id)
+
+            if villager.id not in handled_villager_ids:
+                if villager not in changeset["villager_updates"]:
+                    changeset["villager_updates"].append(villager)
+            # --- 【核心修正】END ---
+
         self._process_reproduction(current_tick, changeset)
         self._process_house_decay(current_tick, changeset)
         
@@ -265,24 +264,29 @@ class VillagerManager:
         warehouse = self.houses.get(villager.house_id)
         if not warehouse: return
 
-        # ... (优先级 1, 2, 3: 求生、食物、农田 的逻辑保持不变) ...
-        if villager.hunger < self.hunger_threshold:
+        # 优先级 1 & 2: 食物
+        if villager.hunger < self.hunger_threshold or warehouse.food_storage < self.food_security_threshold:
             mature_farm = self._find_nearest_target(villager.x, villager.y, world_grid, FARM_MATURE)
-            if mature_farm: self._set_move_task(villager, TaskType.HARVEST_FARM, mature_farm); return
-        if warehouse.food_storage < self.food_security_threshold:
-            mature_farm = self._find_nearest_target(villager.x, villager.y, world_grid, FARM_MATURE)
-            if mature_farm: self._set_move_task(villager, TaskType.HARVEST_FARM, mature_farm); return
+            if mature_farm:
+                self._set_move_task(villager, TaskType.HARVEST_FARM, mature_farm)
+                return
+
+        # 优先级 3: 农田
         population = len([v for v in self.villagers.values() if v.is_alive])
         farm_count = self._count_farms(world_grid)
         required_farms = math.ceil(population / 2.0) + 1
         if farm_count < required_farms and self._can_work(villager, TaskType.BUILD_FARMLAND):
             farmland_site = self._find_farmland_site(villager.x, villager.y, world_grid)
-            if farmland_site: self._set_move_task(villager, TaskType.BUILD_FARMLAND, farmland_site); return
+            if farmland_site:
+                self._set_move_task(villager, TaskType.BUILD_FARMLAND, farmland_site)
+                return
             else:
                 water_site = self._find_nearest_target(villager.x, villager.y, world_grid, WATER)
-                if water_site: self._set_move_task(villager, TaskType.MOVE_TO_WATER, water_site); return
+                if water_site:
+                    self._set_move_task(villager, TaskType.MOVE_TO_WATER, water_site)
+                    return
 
-        # --- 【核心修改】START: 全新住房决策 ---
+        # 优先级 4: 住房
         if warehouse.x is None: 
             vacant_house = self._find_vacant_house()
             if vacant_house and vacant_house.x is not None and vacant_house.y is not None:
@@ -290,42 +294,11 @@ class VillagerManager:
                 return
 
             house_count = len([h for h in self.houses.values() if h.x is not None and h.is_standing])
-            required_houses = math.ceil(population / 3.0)
-
             # 【核心修正】使用新的“意图锁定”函数
-            if house_count < required_houses and not self._is_house_build_intended():
-                if self._can_work(villager, TaskType.BUILD_HOUSE):
-                    if warehouse.wood_storage >= self.build_house_wood_cost:
-                        site = self._find_house_site(villager.x, villager.y, world_grid)
-                        if site:
-                            self._set_move_task(villager, TaskType.BUILD_HOUSE, site)
-                            return
-                    else: 
-                        site = self._find_nearest_target(villager.x, villager.y, world_grid, FOREST)
-                        if site:
-                            self._set_move_task(villager, TaskType.CHOP_TREE, site)
-                            return
-        # --- 【核心修改】END ---
-        
-        self._productive_action(villager, world_grid)
-
-        # --- 【核心修改】START: 全新住房决策 ---
-        if warehouse.x is None: 
-            
-            vacant_house = self._find_vacant_house()
-            # --- 【核心修正】START: 增加安全检查 ---
-            # 只有当找到的房子确实存在，并且它的坐标也存在时，才执行搬家
-            if vacant_house and vacant_house.x is not None and vacant_house.y is not None:
-                logger.debug(f"{log_prefix} Found a vacant house (ID: {vacant_house.id}). Moving in.")
-                # 此处传递的坐标现在可以保证是 (int, int) 类型
-                self._set_move_task(villager, TaskType.MOVE_INTO_HOUSE, (vacant_house.x, vacant_house.y))
-                return
-            # --- 【核心修正】END ---
-
-            house_count = len([h for h in self.houses.values() if h.x is not None and h.is_standing])
+            constructions_count = self._get_house_construction_count()
             required_houses = math.ceil(population / 3.0)
 
-            if house_count < required_houses and not self._is_house_build_in_progress():
+            if (house_count + constructions_count) < required_houses:
                 if self._can_work(villager, TaskType.BUILD_HOUSE):
                     if warehouse.wood_storage >= self.build_house_wood_cost:
                         site = self._find_house_site(villager.x, villager.y, world_grid)
@@ -704,17 +677,17 @@ class VillagerManager:
         # 3. 直接调用数据库的 commit_changes 函数来完成原子化写入
         database.commit_changes(map_id, changeset)
 
-    def _is_house_build_in_progress(self) -> bool:
+    def _get_house_construction_count(self) -> int:
         """
-        【新】检查当前是否有任何村民正在执行建造房屋的任务。
-        这是实现“只派一个人去建房”的关键。
+        【新】根据您的建议，统计当前有多少村民正在（或正要去）建房子。
         """
+        count = 0
         for villager in self.villagers.values():
             if villager.is_alive and villager.current_task and "BUILD_HOUSE" in villager.current_task:
-                return True
-        return False
+                count += 1
+        return count
     
-# 请将这个新函数添加到 core/villager_manager.py 的 VillagerManager 类内部
+
     def _find_vacant_house(self) -> Optional[House]:
         """
         【新】寻找一个有空余位置的、已经建好的实体房屋。
