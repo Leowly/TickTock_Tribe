@@ -181,19 +181,24 @@ class MapViewer {
     this.ctx.strokeStyle = '#000000';
     this.ctx.lineWidth = 1;
     for (const house of this.houses) {
-      if (!house.is_standing) continue;
+      // is_standing 的检查保留，但坐标检查改为 house.x 是否为 null
+      if (!house.is_standing || house.x == null) continue; // 不绘制虚拟仓库
       const screenX = house.x * currentTileSize - this.camera.x;
       const screenY = house.y * currentTileSize - this.camera.y;
       if (screenX + currentTileSize < 0 || screenX > window.innerWidth * this.dpr ||
           screenY + currentTileSize < 0 || screenY > window.innerHeight * this.dpr) continue;
+      
       const houseSize = currentTileSize * 1.2;
       this.ctx.fillRect(screenX - houseSize/4, screenY - houseSize/4, houseSize, houseSize);
       this.ctx.strokeRect(screenX - houseSize/4, screenY - houseSize/4, houseSize, houseSize);
+      
+      // 【修改】不再显示容量信息，只显示居住人数
       if (currentTileSize > 20) {
         this.ctx.fillStyle = '#FFFFFF';
         this.ctx.font = `${Math.max(8, currentTileSize/4)}px Arial`;
         this.ctx.textAlign = 'center';
-        this.ctx.fillText(`${house.occupants}/${house.capacity}`, screenX + houseSize/4, screenY + houseSize/4);
+        this.ctx.textBaseline = 'middle'; // 垂直居中
+        this.ctx.fillText(`${house.occupants}`, screenX + houseSize/4, screenY + houseSize/4);
       }
     }
   }

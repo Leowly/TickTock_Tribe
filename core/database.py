@@ -41,13 +41,10 @@ DB_PATH = os.path.join(DATA_DIR, 'world_maps.db')
 
 # --- 内部辅助函数 ---
 def _get_connection():
-    """
-    【修改】获取数据库连接，并启用外键约束和WAL模式以支持高并发。
-    """
-    # 增加 timeout 参数，并启用 WAL 模式
+    """获取数据库连接，并启用外键约束和WAL模式以支持高并发。"""
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode=WAL;") # 关键改动：启用预写日志模式
+    conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
 def _unpack_3bit_bytes(packed_bytes: bytes, width: int, height: int) -> List[List[int]]:
@@ -86,9 +83,8 @@ def _write_tile_to_blob(packed_data: bytearray, x: int, y: int, value: int, widt
 
 # --- 公共API ---
 def init_db():
-    """初始化数据库。此函数创建所有表结构。"""
+    """【新】初始化数据库。此函数创建所有表结构。"""
     with _get_connection() as conn:
-        # --- World Maps 表 ---
         conn.execute('''
         CREATE TABLE IF NOT EXISTS world_maps (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,15 +96,14 @@ def init_db():
         )
         ''')
         
-        # --- Houses 表 ---
         conn.execute('''
         CREATE TABLE IF NOT EXISTS houses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             map_id INTEGER NOT NULL,
-            x INTEGER,
+            x INTEGER, 
             y INTEGER,
-            capacity INTEGER NOT NULL DEFAULT 4,
-            current_occupants TEXT, -- JSON array of villager IDs
+            capacity INTEGER NOT NULL DEFAULT 999,
+            current_occupants TEXT, 
             food_storage INTEGER DEFAULT 0,
             wood_storage INTEGER DEFAULT 0,
             seeds_storage INTEGER DEFAULT 0,
@@ -119,34 +114,29 @@ def init_db():
         )
         ''')
         
-        # --- Villagers 表---
         conn.execute('''
         CREATE TABLE IF NOT EXISTS villagers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             map_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             gender TEXT NOT NULL CHECK(gender IN ('male', 'female')),
-            age INTEGER NOT NULL DEFAULT 20, -- 年龄（岁）
-            age_in_ticks INTEGER NOT NULL DEFAULT 0, -- 年龄（tick）
+            age INTEGER NOT NULL DEFAULT 20, 
+            age_in_ticks INTEGER NOT NULL DEFAULT 0,
             x INTEGER NOT NULL,
             y INTEGER NOT NULL,
-            house_id INTEGER, -- 可以为NULL，表示无家可归
+            house_id INTEGER NOT NULL,
             hunger INTEGER NOT NULL DEFAULT 100,
-            food INTEGER DEFAULT 0,
-            wood INTEGER DEFAULT 0,
-            seeds INTEGER DEFAULT 0,
             status TEXT DEFAULT 'idle',
-            current_task TEXT, -- 例如: 'build_farmland:10,20'
+            current_task TEXT,
             task_progress INTEGER DEFAULT 0,
             last_reproduction_tick INTEGER DEFAULT 0,
             is_alive BOOLEAN DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (map_id) REFERENCES world_maps (id) ON DELETE CASCADE,
-            FOREIGN KEY (house_id) REFERENCES houses (id) ON DELETE SET NULL
+            FOREIGN KEY (house_id) REFERENCES houses (id) ON DELETE CASCADE
         )
         ''')
 
-        # --- Events 表 ---
         conn.execute('''
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,29 +153,22 @@ def init_db():
         logger.info("Database initialized and all tables are ensured to exist.")
 
 def get_world_snapshot(map_id: int) -> Optional[WorldSnapshot]:
-    """
-    【统一读取接口】
-    获取一个完整的世界状态快照，包含解包后的地形和所有实体。
-    """
+    """获取一个完整的世界状态快照，包含解包后的地形和所有实体。"""
     try:
         with closing(_get_connection()) as conn:
             conn.row_factory = sqlite3.Row
             
-            # 1. 获取地图 BLOB 和元数据
             map_row = conn.execute("SELECT width, height, map_data FROM world_maps WHERE id=?", (map_id,)).fetchone()
             if not map_row: return None
             width, height, map_blob = map_row
 
-            # 2. 获取实体
             villagers = [dict(row) for row in conn.execute("SELECT * FROM villagers WHERE map_id=? AND is_alive=1", (map_id,)).fetchall()]
             houses_rows = conn.execute("SELECT * FROM houses WHERE map_id=? AND is_standing=1", (map_id,)).fetchall()
             
-            # 3. 处理数据格式
             grid_2d = _unpack_3bit_bytes(map_blob, width, height)
             houses = []
             for row in houses_rows:
                 house = dict(row)
-                # 解析JSON字段
                 house['current_occupants'] = json.loads(house.get('current_occupants') or '[]')
                 houses.append(house)
 
@@ -196,56 +179,63 @@ def get_world_snapshot(map_id: int) -> Optional[WorldSnapshot]:
         return None
 
 def commit_changes(map_id: int, changeset: Dict[str, List[Any]]):
-    """
-    【统一写入接口】
-    以事务方式，将一个包含所有变更的集合提交到数据库。
-    'changeset' 字典结构:
-    {
-        "tile_changes": [(x, y, new_type), ...],
-        "villager_updates": [villager_dict, ...],
-        "house_updates": [house_dict, ...],
-        "new_villagers": [villager_dict, ...],
-        "new_houses": [house_dict, ...],
-        "deleted_villager_ids": [id, ...],
-        "deleted_house_ids": [id, ...]
-    }
-    """
     try:
         with closing(_get_connection()) as conn:
-            # with conn 自动开始一个事务。如果任何步骤失败，所有更改都将回滚。
-            with conn:
-                # --- 1. 处理创建 (Creation) ---
-                # 先创建新的实体，这样它们就可以在同一个tick中被更新
-                
-                new_houses = changeset.get("new_houses")
-                if new_houses:
-                    house_tuples = [
-                        (map_id, h.x, h.y, h.capacity, json.dumps(h.current_occupants), 
-                         h.food_storage, h.wood_storage, h.seeds_storage, h.build_tick, h.is_standing)
-                        for h in new_houses
-                    ]
-                    conn.executemany(
-                        "INSERT INTO houses (map_id, x, y, capacity, current_occupants, food_storage, wood_storage, seeds_storage, build_tick, is_standing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        house_tuples
-                    )
+            with conn: 
+                # Block 1: initial_creation_pairs (no change)
+                initial_pairs = changeset.get("initial_creation_pairs", [])
+                for villager_obj, house_obj in initial_pairs:
+                    house_cursor = conn.execute("INSERT INTO houses (map_id, x, y, capacity, current_occupants, food_storage, wood_storage, seeds_storage, build_tick, is_standing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (map_id, house_obj.x, house_obj.y, house_obj.capacity, "[]", house_obj.food_storage, house_obj.wood_storage, house_obj.seeds_storage, house_obj.build_tick, house_obj.is_standing))
+                    real_house_id = house_cursor.lastrowid
+                    villager_cursor = conn.execute("INSERT INTO villagers (map_id, name, gender, age, age_in_ticks, x, y, house_id, hunger, status, current_task, task_progress, last_reproduction_tick, is_alive) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (map_id, villager_obj.name, villager_obj.gender, villager_obj.age, villager_obj.age_in_ticks, villager_obj.x, villager_obj.y, real_house_id, villager_obj.hunger, villager_obj.status.value, villager_obj.current_task, villager_obj.task_progress, villager_obj.last_reproduction_tick, villager_obj.is_alive))
+                    real_villager_id = villager_cursor.lastrowid
+                    conn.execute("UPDATE houses SET current_occupants=? WHERE id=?", (json.dumps([real_villager_id]), real_house_id))
 
-                new_villagers = changeset.get("new_villagers")
-                if new_villagers:
-                    villager_tuples = [
-                        (map_id, v.name, v.gender, v.age, v.age_in_ticks, v.x, v.y, v.house_id,
-                         v.hunger, v.food, v.wood, v.seeds, v.status.value, v.current_task,
-                         v.task_progress, v.last_reproduction_tick, v.is_alive)
-                        for v in new_villagers
-                    ]
-                    conn.executemany(
-                        "INSERT INTO villagers (map_id, name, gender, age, age_in_ticks, x, y, house_id, hunger, food, wood, seeds, status, current_task, task_progress, last_reproduction_tick, is_alive) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        villager_tuples
-                    )
+                # Block 2: new_villagers (no change)
+                new_villagers = changeset.get("new_villagers", [])
+                for villager_obj in new_villagers:
+                    villager_cursor = conn.execute("INSERT INTO villagers (map_id, name, gender, age, age_in_ticks, x, y, house_id, hunger, status, current_task, task_progress, last_reproduction_tick, is_alive) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (map_id, villager_obj.name, villager_obj.gender, villager_obj.age, villager_obj.age_in_ticks, villager_obj.x, villager_obj.y, villager_obj.house_id, villager_obj.hunger, villager_obj.status.value, villager_obj.current_task, villager_obj.task_progress, villager_obj.last_reproduction_tick, villager_obj.is_alive))
+                    real_villager_id = villager_cursor.lastrowid
+                    house_row = conn.execute("SELECT current_occupants FROM houses WHERE id=?", (villager_obj.house_id,)).fetchone()
+                    if house_row:
+                        occupants = json.loads(house_row[0])
+                        if -1 in occupants: occupants.remove(-1)
+                        occupants.append(real_villager_id)
+                        conn.execute("UPDATE houses SET current_occupants=? WHERE id=?", (json.dumps(occupants), villager_obj.house_id))
 
-                # --- 2. 处理更新 (Updates) ---
+                # Block 3: build_and_move_requests (no change)
+                build_requests = changeset.get("build_and_move_requests", [])
+                for villager_obj, new_house_blueprint, old_warehouse_obj in build_requests:
+                    house_cursor = conn.execute("INSERT INTO houses (map_id, x, y, capacity, current_occupants, food_storage, wood_storage, seeds_storage, build_tick, is_standing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",(map_id, new_house_blueprint.x, new_house_blueprint.y, new_house_blueprint.capacity, "[]", old_warehouse_obj.food_storage, old_warehouse_obj.wood_storage, old_warehouse_obj.seeds_storage, new_house_blueprint.build_tick, new_house_blueprint.is_standing))
+                    real_house_id = house_cursor.lastrowid
+                    conn.execute("UPDATE villagers SET house_id=? WHERE id=?", (real_house_id, villager_obj.id))
+                    conn.execute("UPDATE houses SET current_occupants=? WHERE id=?", (json.dumps([villager_obj.id]), real_house_id))
+                    if old_warehouse_obj.x is None:
+                        conn.execute("DELETE FROM houses WHERE id=?", (old_warehouse_obj.id,))
+
+                # Block 4: homeless_updates (no change)
+                homeless_updates = changeset.get("homeless_updates", [])
+                for villager_obj, new_virtual_warehouse_obj in homeless_updates:
+                    house_cursor = conn.execute("INSERT INTO houses (map_id, x, y, capacity, current_occupants, food_storage, wood_storage, seeds_storage, build_tick, is_standing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (map_id, new_virtual_warehouse_obj.x, new_virtual_warehouse_obj.y, new_virtual_warehouse_obj.capacity, "[]", 0, 0, 0, new_virtual_warehouse_obj.build_tick, new_virtual_warehouse_obj.is_standing))
+                    real_house_id = house_cursor.lastrowid
+                    conn.execute("UPDATE villagers SET house_id=? WHERE id=?", (real_house_id, villager_obj.id))
+                    conn.execute("UPDATE houses SET current_occupants=? WHERE id=?", (json.dumps([villager_obj.id]), real_house_id))
+
+                # NEW Block 5: move_in_requests
+                move_in_requests = changeset.get("move_in_requests", [])
+                for villager_obj, old_warehouse_obj, target_house_obj in move_in_requests:
+                    conn.execute("UPDATE houses SET food_storage = food_storage + ?, wood_storage = wood_storage + ?, seeds_storage = seeds_storage + ? WHERE id = ?", (old_warehouse_obj.food_storage, old_warehouse_obj.wood_storage, old_warehouse_obj.seeds_storage, target_house_obj.id))
+                    conn.execute("UPDATE villagers SET house_id = ? WHERE id = ?", (target_house_obj.id, villager_obj.id))
+                    target_house_row = conn.execute("SELECT current_occupants FROM houses WHERE id=?", (target_house_obj.id,)).fetchone()
+                    if target_house_row:
+                        occupants = json.loads(target_house_row[0])
+                        occupants.append(villager_obj.id)
+                        conn.execute("UPDATE houses SET current_occupants = ? WHERE id = ?", (json.dumps(occupants), target_house_obj.id))
+                    if old_warehouse_obj.x is None:
+                        conn.execute("DELETE FROM houses WHERE id = ?", (old_warehouse_obj.id,))
                 
-                # 地形变更
-                tile_changes = changeset.get("tile_changes")
+                # Block 6: Regular updates (no change)
+                tile_changes = changeset.get("tile_changes", [])
                 if tile_changes:
                     map_row = conn.execute("SELECT width, map_data FROM world_maps WHERE id=?", (map_id,)).fetchone()
                     if map_row:
@@ -254,51 +244,27 @@ def commit_changes(map_id: int, changeset: Dict[str, List[Any]]):
                         for x, y, new_type in tile_changes:
                             _write_tile_to_blob(map_bytearray, x, y, new_type, width)
                         conn.execute("UPDATE world_maps SET map_data=? WHERE id=?", (bytes(map_bytearray), map_id))
-
-                # 村民状态更新
-                villager_updates = changeset.get("villager_updates")
+                villager_updates = changeset.get("villager_updates", [])
                 if villager_updates:
-                    update_tuples = [
-                        (v.age, v.age_in_ticks, v.x, v.y, v.house_id, v.hunger, v.food, v.wood, v.seeds,
-                         v.status.value, v.current_task, v.task_progress, v.last_reproduction_tick, v.is_alive, v.id) 
-                        for v in villager_updates
-                    ]
-                    conn.executemany(
-                        "UPDATE villagers SET age=?, age_in_ticks=?, x=?, y=?, house_id=?, hunger=?, food=?, wood=?, seeds=?, status=?, current_task=?, task_progress=?, last_reproduction_tick=?, is_alive=? WHERE id=?",
-                        update_tuples
-                    )
-
-                # 房屋状态更新
-                house_updates = changeset.get("house_updates")
+                    update_tuples = [(v.age, v.age_in_ticks, v.x, v.y, v.house_id, v.hunger, v.status.value, v.current_task, v.task_progress, v.last_reproduction_tick, v.is_alive, v.id) for v in villager_updates]
+                    conn.executemany("UPDATE villagers SET age=?, age_in_ticks=?, x=?, y=?, house_id=?, hunger=?, status=?, current_task=?, task_progress=?, last_reproduction_tick=?, is_alive=? WHERE id=?", update_tuples)
+                house_updates = changeset.get("house_updates", [])
                 if house_updates:
-                    update_tuples = [
-                        (json.dumps(h.current_occupants), h.food_storage, h.wood_storage, h.seeds_storage, h.is_standing, h.id) 
-                        for h in house_updates
-                    ]
-                    conn.executemany(
-                        "UPDATE houses SET current_occupants=?, food_storage=?, wood_storage=?, seeds_storage=?, is_standing=? WHERE id=?",
-                        update_tuples
-                    )
+                    update_tuples = [(json.dumps(h.current_occupants), h.food_storage, h.wood_storage, h.seeds_storage, h.is_standing, h.id) for h in house_updates]
+                    conn.executemany("UPDATE houses SET current_occupants=?, food_storage=?, wood_storage=?, seeds_storage=?, is_standing=? WHERE id=?", update_tuples)
                 
-                # --- 3. 处理删除 (Deletion) ---
-                # 最后执行删除，以避免外键约束问题
+                # Block 7: Deletes (no change)
+                deleted_villager_ids = changeset.get("deleted_villager_ids", [])
+                if deleted_villager_ids: conn.executemany("DELETE FROM villagers WHERE id=?", [(vid,) for vid in deleted_villager_ids])
+                deleted_house_ids = changeset.get("deleted_house_ids", [])
+                if deleted_house_ids: conn.executemany("DELETE FROM houses WHERE id=?", [(hid,) for hid in deleted_house_ids])
                 
-                deleted_house_ids = changeset.get("deleted_house_ids")
-                if deleted_house_ids:
-                    # 注意：由于村民表有外键约束，删除房屋前必须先确保房屋是空的
-                    conn.executemany("DELETE FROM houses WHERE id=?", [(hid,) for hid in deleted_house_ids])
-
-                deleted_villager_ids = changeset.get("deleted_villager_ids")
-                if deleted_villager_ids:
-                    conn.executemany("DELETE FROM villagers WHERE id=?", [(vid,) for vid in deleted_villager_ids])
-
     except sqlite3.IntegrityError as e:
         logger.error(f"Database Integrity Error during commit for map {map_id}: {e}. Changes will be rolled back.")
-        raise # 重新抛出，让上层知道事务失败
-
+        raise
     except Exception as e:
         logger.error(f"Failed to commit changeset for map {map_id}: {e}", exc_info=True)
-        raise # 重新抛出异常，让上层知道事务失败
+        raise
 
 def insert_map(name: str, width: int, height: int, map_bytes: bytes) -> Optional[int]:
     """插入一张新地图到数据库。"""
@@ -337,58 +303,6 @@ def delete_map(map_id: int) -> bool:
         logger.error(f"删除地图时发生异常，地图ID {map_id}，错误信息：{e}")
         return False
 
-# --- 事件日志函数---
-
-def log_event(map_id: int, tick: int, event_type: str, payload: Dict[str, Any]):
-    """
-    记录一个游戏事件，用于增量更新。
-    此函数被设计为"即发即忘"，即使失败也不应中断主更新循环，
-    但会记录错误。
-    """
-    payload_json = json.dumps(payload)
-    try:
-        # 注意：这里我们为事件日志使用一个独立的连接，
-        # 以确保它在主事务之外，或者如果需要也可以包含在内。
-        # 简单起见，我们使用独立连接。
-        with closing(_get_connection()) as conn:
-            with conn:
-                conn.execute(
-                    "INSERT INTO events (map_id, tick, event_type, payload) VALUES (?, ?, ?, ?)",
-                    (map_id, tick, event_type, payload_json)
-                )
-    except Exception as e:
-        # 日志记录失败不应该使整个Tick失败，但需要被知晓
-        logger.warning(f"Failed to log event for map {map_id} at tick {tick}: {e}")
-
-
-def get_events_since_tick(map_id: int, since_tick: int) -> List[Dict[str, Any]]:
-    """
-    【API调用】获取指定tick之后的所有事件。
-    这是提供给客户端API用于高效刷新的接口。
-    """
-    try:
-        with closing(_get_connection()) as conn:
-            # 使用 sqlite3.Row 工厂可以让我们像访问字典一样访问列
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                "SELECT tick, event_type, payload FROM events WHERE map_id=? AND tick > ? ORDER BY tick",
-                (map_id, since_tick)
-            )
-            
-            events = []
-            for row in cursor.fetchall():
-                # 将数据库行转换为字典
-                event = dict(row)
-                # 将存储为JSON字符串的payload解码回Python字典
-                event['payload'] = json.loads(event['payload'])
-                events.append(event)
-            return events
-            
-    except Exception as e:
-        logger.error(f"Error fetching events for map {map_id} since tick {since_tick}: {e}")
-        # 在发生任何错误时，安全地返回一个空列表
-        return []
-
 def get_villager_by_id(villager_id: int) -> Optional[Dict[str, Any]]:
     """根据ID获取单个村民的详细数据。"""
     with closing(_get_connection()) as conn:
@@ -406,6 +320,5 @@ def get_house_by_id(house_id: int) -> Optional[Dict[str, Any]]:
         if not row:
             return None
         house_data = dict(row)
-        # 解析JSON字段
         house_data['current_occupants'] = json.loads(house_data.get('current_occupants') or '[]')
         return house_data

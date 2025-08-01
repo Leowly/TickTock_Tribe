@@ -21,7 +21,6 @@ class Ticker:
         """
         self.world_updater = world_updater
         
-        # 【修改】保存基础速率，并使当前速率可变
         self.base_tick_interval = tick_interval
         self.tick_interval = tick_interval
         
@@ -40,12 +39,10 @@ class Ticker:
         """
         with self._lock:
             if speed_multiplier > 0:
-                # 速度越快，间隔越短
                 self.tick_interval = self.base_tick_interval / speed_multiplier
                 logger.info(f"Ticker speed set to {speed_multiplier}x. New interval: {self.tick_interval:.2f}s")
             else:
-                # 暂停：设置一个超长的间隔时间
-                self.tick_interval = 3600  # 暂停1小时
+                self.tick_interval = 3600
                 logger.info("Ticker paused.")
 
     def start_simulation(self, map_id: int):
@@ -114,7 +111,6 @@ class Ticker:
                 time.sleep(self.tick_interval)
                 continue
             
-            # 【修改】使用可变的 tick_interval
             time.sleep(self.tick_interval)
 
             with self._lock:
